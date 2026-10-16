@@ -37,8 +37,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel?.setVisible(visible)
     }
 
-    func repositionNotch() {
-        panel?.reposition()
+    var notchPositionState: NotchPositionState? {
+        panel?.positionState
+    }
+
+    func setNotchPosition(_ position: NotchPosition) {
+        panel?.setPosition(position)
+    }
+
+    func resetNotchPosition() {
+        panel?.resetPosition()
     }
 }
 

@@ -4,7 +4,6 @@ import SwiftUI
 struct JBLCompanionApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @AppStorage("showNotchCircle") private var showNotchCircle = true
-    @AppStorage("notchOffset") private var notchOffset: Double = 140
 
     var body: some Scene {
         MenuBarExtra {
@@ -14,9 +13,6 @@ struct JBLCompanionApp: App {
         }
         .onChange(of: showNotchCircle) { _, newValue in
             appDelegate.setNotchVisible(newValue)
-        }
-        .onChange(of: notchOffset) { _, _ in
-            appDelegate.repositionNotch()
         }
     }
 
@@ -28,12 +24,28 @@ struct JBLCompanionApp: App {
         Text("Noise mode: \(state.noiseMode.displayText)")
         Divider()
         Toggle("Show notch circle", isOn: $showNotchCircle)
-        VStack(alignment: .leading) {
-            Text("Notch offset: \(Int(notchOffset))pt")
-            Slider(value: $notchOffset, in: 40...300, step: 10)
-        }
+        positionSection
         Divider()
         Button("Quit") { NSApplication.shared.terminate(nil) }
             .keyboardShortcut("q")
+    }
+
+    @ViewBuilder
+    private var positionSection: some View {
+        if let positionState = appDelegate.notchPositionState {
+            let position = positionState.position
+            Text("Position").font(.caption).foregroundStyle(.secondary)
+            Stepper(
+                "X: \(Int(position.x))pt",
+                onIncrement: { appDelegate.setNotchPosition(NotchPosition(x: position.x + 10, y: position.y)) },
+                onDecrement: { appDelegate.setNotchPosition(NotchPosition(x: position.x - 10, y: position.y)) }
+            )
+            Stepper(
+                "Y: \(Int(position.y))pt",
+                onIncrement: { appDelegate.setNotchPosition(NotchPosition(x: position.x, y: position.y + 10)) },
+                onDecrement: { appDelegate.setNotchPosition(NotchPosition(x: position.x, y: position.y - 10)) }
+            )
+            Button("Reset position") { appDelegate.resetNotchPosition() }
+        }
     }
 }
