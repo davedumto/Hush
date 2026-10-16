@@ -32,6 +32,10 @@ final class RFCOMMRaceLink: NSObject {
     private var hasAttemptedFirstOpen = false
     private var pendingOpenWorkItem: DispatchWorkItem?
 
+    /// Owns the "a failed open gets retried a few times, a few seconds apart" schedule — see its
+    /// own doc comment for why that logic lives here rather than inline.
+    private lazy var retryCoordinator = RFCOMMOpenRetryCoordinator(attemptOpen: { [weak self] in self?.openChannel() })
+
     private(set) var lastOpenIOReturn: String?
     private(set) var recentFrameDescriptions: [String] = []
     private(set) var totalFramesReassembled = 0
@@ -48,13 +52,14 @@ final class RFCOMMRaceLink: NSObject {
 
     func handleClassicConnected() {
         isClassicLinkUp = true
-        scheduleOpen()
+        scheduleFirstOpenAttempt()
     }
 
     func handleClassicDisconnected() {
         isClassicLinkUp = false
         pendingOpenWorkItem?.cancel()
         pendingOpenWorkItem = nil
+        retryCoordinator.cancel()
         if let channel {
             _ = channel.close()
         }
@@ -67,14 +72,17 @@ final class RFCOMMRaceLink: NSObject {
     /// silently fail to even reach bluetoothd if issued right at process start — a client-side XPC
     /// session warm-up race, not a device-side refusal (the near-identical rfcomm_probe.swift
     /// opened the same channel instantly moments later in the same process). Delaying only the
-    /// first attempt gives that session time to finish setting up; later reconnects within the
-    /// same long-running app process don't need it again.
-    private func scheduleOpen() {
+    /// very first attempt gives that session time to finish setting up; later reconnects within
+    /// the same long-running app process don't need it again. This is a separate concern from
+    /// RFCOMMOpenRetryCoordinator's retry-on-failure schedule — this delay happens once, before
+    /// the first attempt is even made; the coordinator only acts once an attempt has actually
+    /// failed.
+    private func scheduleFirstOpenAttempt() {
         guard channel == nil else { return }
         pendingOpenWorkItem?.cancel()
         let delay: TimeInterval = hasAttemptedFirstOpen ? 0 : 2
         hasAttemptedFirstOpen = true
-        let workItem = DispatchWorkItem { [weak self] in self?.openChannel() }
+        let workItem = DispatchWorkItem { [weak self] in self?.retryCoordinator.start() }
         pendingOpenWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
     }
@@ -89,8 +97,15 @@ final class RFCOMMRaceLink: NSObject {
         let result = device.openRFCOMMChannelAsync(&newChannel, withChannelID: channelID, delegate: self)
         lastOpenIOReturn = Self.describeIOReturn(result)
         logger.info("openRFCOMMChannelAsync: \(self.lastOpenIOReturn ?? "?", privacy: .public)")
-        // The channel itself is only actually usable once rfcommChannelOpenComplete confirms
-        // success — newChannel here may be non-nil but not yet open.
+        guard result == kIOReturnSuccess else {
+            // The immediate call itself failed (request never even queued) — treat it exactly
+            // like an eventual rfcommChannelOpenComplete failure so the same retry schedule
+            // applies either way.
+            retryCoordinator.handleOpenFailure()
+            return
+        }
+        // Success here only means the request was queued; the channel becomes usable (or the
+        // attempt is confirmed failed) once rfcommChannelOpenComplete reports back.
     }
 
     private static func describeIOReturn(_ r: IOReturn) -> String {
@@ -133,9 +148,11 @@ extension RFCOMMRaceLink {
         MainActor.assumeIsolated {
             guard error == kIOReturnSuccess else {
                 logger.error("RFCOMM channel open failed: \(Self.describeIOReturn(error), privacy: .public)")
+                retryCoordinator.handleOpenFailure()
                 return
             }
             channel = rfcommChannel
+            retryCoordinator.handleOpenSuccess()
             logger.info("RFCOMM channel open. MTU=\(rfcommChannel.getMTU(), privacy: .public)")
         }
     }
@@ -150,11 +167,11 @@ extension RFCOMMRaceLink {
         MainActor.assumeIsolated {
             logger.info("RFCOMM channel closed")
             channel = nil
-            // Still classic-connected (if we are) — scheduleOpen() will try again on the next
-            // classic reconnect notification, or immediately if the link is still up and this
-            // closure wasn't caused by handleClassicDisconnected (which already nils `channel`
-            // itself and cancels any pending reopen, so this is a no-op in that case).
-            if isClassicLinkUp { scheduleOpen() }
+            // Still classic-connected (if we are) — start a fresh open attempt right away. If
+            // this closure was actually caused by handleClassicDisconnected, isClassicLinkUp is
+            // already false by the time this runs, so it's a no-op (that path already nils
+            // `channel` and cancels retryCoordinator itself).
+            if isClassicLinkUp { retryCoordinator.start() }
         }
     }
 }
@@ -192,6 +209,10 @@ extension RFCOMMRaceLink {
     var channelStateDescription: String {
         if !isClassicLinkUp { return "not connected" }
         return isChannelOpen ? "open" : "connecting"
+    }
+
+    var openRetryCount: Int {
+        retryCoordinator.retryCount
     }
 
     var reassemblerStatsDescription: String {

@@ -94,8 +94,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func diagnosticsText() -> String {
         return """
         JBLCompanion diagnostics
+        Classic connection: \(classicMonitor.isConnectedDescription)
+        HeadphoneState.connection: \(headphoneState.connection)
         RFCOMM state: \(rfcommLink.channelStateDescription)
         Last RFCOMM open IOReturn: \(rfcommLink.lastOpenIOReturn ?? "never attempted")
+        RFCOMM open retry count: \(rfcommLink.openRetryCount)
         Last frames received: \(rfcommLink.recentFrameDescriptions.isEmpty ? "none" : rfcommLink.recentFrameDescriptions.joined(separator: " | "))
         Reassembler stats: \(rfcommLink.reassemblerStatsDescription)
         Noise mode: \(headphoneState.noiseMode.displayText)
