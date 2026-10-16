@@ -71,10 +71,12 @@ final class NotchSilhouetteView: NSView {
     /// `targetGap` are the floating-gap values (nil = attached/flush, the normal rounded-card
     /// shape) at each end — e.g. the collapsed capsule's gap at one end and nil at the other,
     /// since the capsule's pill shape only ever applies to the small resting indicator, never to
-    /// the wide expanded card. The gap is linearly interpolated between them across the resize,
-    /// so a capsule's rounded ends visually ease open as it grows into the card (and back as it
-    /// shrinks). Calls `completion` once the resize has settled (or immediately, unanimated,
-    /// under Reduce Motion).
+    /// the wide expanded card. Both the inset (gap) AND the corner radius are linearly
+    /// interpolated between the two ends across the resize — interpolating the radius matters
+    /// just as much as the gap: a capsule's radius is height/2 (a true pill), so without easing
+    /// the radius itself down too, the shape stays pill-shaped for most of the growth even once
+    /// it's already wide. Calls `completion` once the resize has settled (or immediately,
+    /// unanimated, under Reduce Motion).
     func resize(
         to target: CGSize, from start: CGSize, startGap: CGFloat?, targetGap: CGFloat?,
         envelopeSize: CGSize, reduceMotion: Bool, completion: @escaping () -> Void
@@ -88,15 +90,16 @@ final class NotchSilhouetteView: NSView {
         func origin(for size: CGSize) -> CGPoint {
             CGPoint(x: (envelopeSize.width - size.width) / 2, y: envelopeSize.height - size.height)
         }
-        func gap(at t: Double) -> CGFloat? {
-            let s = startGap ?? 0
-            let e = targetGap ?? 0
-            guard s != 0 || e != 0 else { return nil }
-            let interpolated = s + (e - s) * CGFloat(t)
-            return interpolated > 0.5 ? interpolated : nil
-        }
+        // 0 = flush card shape, 1 = full pill — interpolated continuously, not switched at a threshold.
+        let startPillness: Double = startGap != nil ? 1 : 0
+        let targetPillness: Double = targetGap != nil ? 1 : 0
         func path(for size: CGSize, at t: Double) -> CGPath {
-            let raw = IslandShape.path(size: size, floatingGap: gap(at: t))
+            let pillness = CGFloat(startPillness + (targetPillness - startPillness) * t)
+            let inset = (startGap ?? 0) + ((targetGap ?? 0) - (startGap ?? 0)) * CGFloat(t)
+            let cardRadius = IslandShape.cardRadius(height: size.height)
+            let pillRadius = IslandShape.pillRadius(height: size.height)
+            let radius = cardRadius + (pillRadius - cardRadius) * pillness
+            let raw = IslandShape.path(size: size, inset: inset, cornerRadius: radius)
             var transform = CGAffineTransform(translationX: origin(for: size).x, y: origin(for: size).y)
             return raw.copy(using: &transform) ?? raw
         }
