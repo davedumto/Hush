@@ -25,6 +25,8 @@ final class BLEBatteryLink: NSObject {
     private var scanTimeoutWorkItem: DispatchWorkItem?
     private var wantsToScan = false
     private var raceNotifyCharacteristicUUID: CBUUID?
+    private var raceWriteCharacteristic: CBCharacteristic?
+    private var isRaceNotifyActive = false
 
     weak var delegate: BLEBatteryLinkDelegate?
 
@@ -51,7 +53,13 @@ final class BLEBatteryLink: NSObject {
             central.cancelPeripheralConnection(peripheral)
         }
         peripheral = nil
+        resetRaceState()
+    }
+
+    private func resetRaceState() {
         raceNotifyCharacteristicUUID = nil
+        raceWriteCharacteristic = nil
+        isRaceNotifyActive = false
     }
 
     private func beginScanIfReady() {
@@ -115,13 +123,13 @@ extension BLEBatteryLink: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         logger.error("BLE connect failed: \(error?.localizedDescription ?? "unknown", privacy: .public)")
         self.peripheral = nil
-        raceNotifyCharacteristicUUID = nil
+        resetRaceState()
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         logger.info("BLE peripheral disconnected")
         self.peripheral = nil
-        raceNotifyCharacteristicUUID = nil
+        resetRaceState()
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.delegate?.bleBatteryLinkDidDisconnect(self)
@@ -182,10 +190,17 @@ extension BLEBatteryLink: CBPeripheralDelegate {
 
         let notifyCharacteristic = notifyCandidates[0]
         raceNotifyCharacteristicUUID = notifyCharacteristic.uuid
+        raceWriteCharacteristic = writeCandidates[0]
         logger.info("Subscribing to RACE notify characteristic \(notifyCharacteristic.uuid.uuidString, privacy: .public)")
         peripheral.setNotifyValue(true, for: notifyCharacteristic)
-        // The write-without-response characteristic (writeCandidates[0]) is intentionally never
-        // used in Phase 2a — WriteGuard's allowlist is empty, and nothing in this phase writes.
+        // Writes themselves only ever happen through NoiseControlCommander, which goes through
+        // WriteGuard first — nothing here writes directly.
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        guard characteristic.uuid == raceNotifyCharacteristicUUID else { return }
+        isRaceNotifyActive = error == nil && characteristic.isNotifying
+        logger.info("RACE notify subscription active=\(self.isRaceNotifyActive, privacy: .public)")
     }
 
     private static func describe(_ properties: CBCharacteristicProperties) -> String {
@@ -222,17 +237,37 @@ extension BLEBatteryLink: CBPeripheralDelegate {
         let frames = RaceFrameParser.parseFrames(from: data)
         for frame in frames {
             guard let event = RaceEventRecognizer.recognize(frame) else {
-                logger.debug("Unrecognized RACE frame type=\(frame.type.rawValue, privacy: .public) id=\(frame.id, privacy: .public) payload=\(frame.payload.jblHexString, privacy: .public)")
+                logger.info("Unrecognized RACE frame type=\(frame.type.rawValue, privacy: .public) id=\(frame.id, privacy: .public) payload=\(frame.payload.jblHexString, privacy: .public)")
                 continue
             }
             switch event {
-            case .noiseMode(let mode):
-                logger.info("Noise mode event: \(String(describing: mode), privacy: .public)")
+            case .noiseMode(let mode, let rawByte):
+                if rawByte == 0x00 {
+                    logger.info("unconfirmed noise mode byte 0x00 (possibly TalkThru)")
+                } else {
+                    logger.info("Noise mode event: \(String(describing: mode), privacy: .public)")
+                }
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     self.delegate?.bleBatteryLink(self, didUpdateNoiseMode: mode)
                 }
             }
         }
+    }
+}
+
+extension BLEBatteryLink: RaceWriteTransport {
+    var isReadyForRaceWrites: Bool {
+        peripheral?.state == .connected && isRaceNotifyActive
+    }
+
+    var raceWriteCharacteristicUUID: CBUUID? {
+        raceWriteCharacteristic?.uuid
+    }
+
+    func performRaceWrite(_ payload: Data) -> Bool {
+        guard isReadyForRaceWrites, let peripheral, let raceWriteCharacteristic else { return false }
+        peripheral.writeValue(payload, for: raceWriteCharacteristic, type: .withoutResponse)
+        return true
     }
 }
