@@ -33,17 +33,10 @@ struct NotchView: View {
 
     @ViewBuilder
     private var collapsedContent: some View {
-        ZStack {
-            if state.connection == .connected {
-                Circle()
-                    .stroke(batteryRingColor, lineWidth: 2)
-                    .padding(2)
-            }
-            Image(systemName: "headphones")
-                .font(.system(size: min(collapsedSize.width, collapsedSize.height) * 0.5, weight: .medium))
-                .foregroundStyle(state.connection == .connected ? accent : .gray)
-        }
-        .frame(width: collapsedSize.width, height: collapsedSize.height)
+        Image(systemName: "headphones")
+            .font(.system(size: min(collapsedSize.width, collapsedSize.height) * 0.5, weight: .medium))
+            .foregroundStyle(state.connection == .connected ? accent : .gray)
+            .frame(width: collapsedSize.width, height: collapsedSize.height)
     }
 
     private var batteryRingColor: Color {
