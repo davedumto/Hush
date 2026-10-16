@@ -35,6 +35,12 @@ protocol DeviceProfile {
     var batteryServiceUUID: CBUUID { get }
     var batteryLevelUUID: CBUUID { get }
 
+    /// Asset catalog names for this model's headphone product photo (design/DESIGN_GUIDE.md §1
+    /// Headphones), nil for a profile with no photographable shot — see the protocol extension's
+    /// default below. CollapsedPill falls back to the generic mark when this is nil, per CLAUDE.md:
+    /// "Unknown JBL models use the generic mark with no photo."
+    var photoAssetNames: HeadphonePhotoAssetNames? { get }
+
     /// Whether this model's noise control is wired up at all — purely a UI gate (NotchView shows
     /// "Controls not available for this model yet" when false) independent of whether RFCOMM is
     /// opened at all. The RACE channel is opened for ANY matched profile now, to listen for status
@@ -91,6 +97,9 @@ protocol DeviceProfile {
 extension DeviceProfile {
     func isModeVerified(_ mode: CommandableNoiseMode) -> Bool { false }
     var trustsZeroBatteryReading: Bool { true }
+    /// Safe by construction: a missing photo only ever falls back to the generic mark, never shows
+    /// a wrong one, so this is fine as a silent default (unlike allowsRFCOMMWrites).
+    var photoAssetNames: HeadphonePhotoAssetNames? { nil }
 
     /// Every CommandableNoiseMode this profile marks verified, provided it actually has a command
     /// frame (CommandableNoiseMode.commandFrame — Off never will). compactMap is

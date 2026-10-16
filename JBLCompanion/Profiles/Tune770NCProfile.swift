@@ -13,6 +13,9 @@ struct Tune770NCProfile: DeviceProfile {
     let batteryServiceUUID = CBUUID(string: "180F")
     let batteryLevelUUID = CBUUID(string: "2A19")
 
+    // design/DESIGN_GUIDE.md §1 Headphones.
+    let photoAssetNames: HeadphonePhotoAssetNames? = HeadphonePhotoAssetNames(black: "Tune770Black", white: "Tune770White")
+
     let supportsNoiseControl = true
     let allowsRFCOMMWrites = true
 

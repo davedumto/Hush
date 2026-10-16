@@ -57,11 +57,26 @@ extension NoiseMode {
     }
 }
 
+/// Asset catalog names for the collapsed-pill/hero headphone photo, theme-contrast pair —
+/// design/DESIGN_GUIDE.md §1 Headphones, §3's "white headphones on the black pill, black
+/// headphones on the white pill." Lives here (framework-free, alongside the rest of the
+/// profile-derived facts HeadphoneState caches), not in Profiles/, so the UI layer never needs to
+/// import CoreBluetooth/IOBluetooth just to read it.
+struct HeadphonePhotoAssetNames: Equatable {
+    let black: String
+    let white: String
+}
+
 @Observable
 @MainActor
 final class HeadphoneState {
     var connection: ConnectionState = .disconnected
     var deviceName: String = ""
+    /// Mirrors the connected profile's DeviceProfile.photoAssetNames — nil while disconnected, or
+    /// while connected to a matched profile with no photographable product shot (CollapsedPill
+    /// falls back to the generic mark; CLAUDE.md: "Unknown JBL models use the generic mark with
+    /// no photo").
+    var photoAssetNames: HeadphonePhotoAssetNames?
     var batteryPercent: Int?
     /// True when the last battery reading was an untrusted 0% (BatteryReadingPolicy), shown as
     /// "--" in the card — distinct from `batteryPercent == nil`, which means no reading at all.

@@ -19,6 +19,9 @@ struct Tune670NCProfile: DeviceProfile {
     let batteryServiceUUID = CBUUID(string: "180F")
     let batteryLevelUUID = CBUUID(string: "2A19")
 
+    // design/DESIGN_GUIDE.md §1 Headphones.
+    let photoAssetNames: HeadphonePhotoAssetNames? = HeadphonePhotoAssetNames(black: "Tune670Black", white: "Tune670White")
+
     // Hardware-verified directly on the 670NC (~/jbl-recon/rfcomm_send_test_670nc.swift): sending
     // the 770NC's ANC (0A 01 00), TalkThru (0A 09 04), and Ambient Aware (0A 0A 04) command frames
     // each produced the matching status event AND the matching physical/audible mode change,

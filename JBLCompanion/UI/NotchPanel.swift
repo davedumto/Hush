@@ -105,7 +105,7 @@ final class NotchPanel: NSPanel {
             rootView: NotchView(
                 state: headphoneState, uiState: uiState, collapsedSize: initialGeometry.collapsedSize,
                 onSelectNoiseMode: onSelectNoiseMode, isModeVerified: isModeVerified,
-                supportsNoiseControl: supportsNoiseControl
+                supportsNoiseControl: supportsNoiseControl, isNotched: { [weak self] in self?.isNotched ?? false }
             )
         )
         // NSHostingView does not clip its own content to its frame by default — if the SwiftUI
@@ -394,7 +394,7 @@ final class NotchPanel: NSPanel {
             rootView: NotchView(
                 state: headphoneState, uiState: probeState, collapsedSize: geometry.collapsedSize,
                 onSelectNoiseMode: { _ in }, isModeVerified: isModeVerified,
-                supportsNoiseControl: supportsNoiseControl
+                supportsNoiseControl: supportsNoiseControl, isNotched: { [weak self] in self?.isNotched ?? false }
             )
         )
         probe.frame = CGRect(x: 0, y: 0, width: max(width, 1), height: 1)

@@ -250,6 +250,7 @@ extension AppDelegate: ClassicConnectionMonitorDelegate {
 
         headphoneState.connection = .connected
         headphoneState.deviceName = profile.displayName
+        headphoneState.photoAssetNames = profile.photoAssetNames
         headphoneState.noiseModeEventMapVerified = profile.eventMapVerified
         headphoneState.lastUpdated = Date()
 
@@ -266,6 +267,7 @@ extension AppDelegate: ClassicConnectionMonitorDelegate {
         headphoneState.batteryPercent = nil
         headphoneState.batteryPercentIsUnverifiedZero = false
         headphoneState.deviceName = ""
+        headphoneState.photoAssetNames = nil
         headphoneState.pendingNoiseMode = nil
         headphoneState.noiseModeConfirmationTimedOut = false
         headphoneState.noiseMode = .unknown

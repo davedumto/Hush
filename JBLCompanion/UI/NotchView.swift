@@ -25,6 +25,13 @@ struct NotchView: View {
     /// (DeviceProfile.supportsNoiseControl) — false hides the segmented control entirely in favor
     /// of a "not available" message, distinct from a verified-but-disabled segment.
     let supportsNoiseControl: () -> Bool
+    /// Whether the active display's menu bar is a physical notch (NotchPanel.isNotched) — a
+    /// closure, not a frozen Bool, since NotchPanel builds this NotchView once at init and never
+    /// reconstructs it, so a plain value would never reflect a later display change. Drives
+    /// CollapsedPill's always-black, square-top notch variant.
+    let isNotched: () -> Bool
+
+    @Environment(\.colorScheme) private var colorScheme
 
     /// JBL's own brand orange — used sparingly, as the one accent color against the black shape.
     private let accent = Color(red: 1.0, green: 0.45, blue: 0.05)
@@ -42,10 +49,22 @@ struct NotchView: View {
 
     @ViewBuilder
     private var collapsedContent: some View {
-        Image(systemName: "headphones")
-            .font(.system(size: min(collapsedSize.width, collapsedSize.height) * 0.5, weight: .medium))
-            .foregroundStyle(state.connection == .connected ? accent : .gray)
+        CollapsedPill(variant: pillVariant)
             .frame(width: collapsedSize.width, height: collapsedSize.height)
+    }
+
+    /// Bridges live app state to PillVariant.resolve — the app only ever docks to the top today
+    /// (NotchPanel has no left/right/bottom placement logic yet) and never produces a real
+    /// "connecting" signal (HeadphoneState has no such state), so those PillVariant cases are
+    /// exercised by CollapsedPill's own previews/tests but not reachable from here.
+    private var pillVariant: PillVariant {
+        PillVariant.resolve(
+            device: state.connection == .connected ? .matched(photo: state.photoAssetNames) : .noDevice,
+            connection: .connected,
+            batteryPercent: state.batteryPercent,
+            theme: colorScheme == .dark ? .dark : .light,
+            dock: .top(isNotched: isNotched())
+        )
     }
 
     /// "--" for an untrusted 0% reading (BatteryReadingPolicy) — distinct from "—", which means no
