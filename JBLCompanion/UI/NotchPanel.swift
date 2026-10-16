@@ -2,36 +2,50 @@ import AppKit
 import SwiftUI
 import os.log
 
-extension UserDefaults {
-    private static let notchOffsetKey = "notchOffset"
-
-    /// Horizontal offset (points) from screen center used when the display has no notch.
-    /// Live-adjustable because Vorssaint also draws at top-center and the two must not collide.
-    var notchOffset: Double {
-        get {
-            object(forKey: Self.notchOffsetKey) == nil ? 140 : double(forKey: Self.notchOffsetKey)
+extension NSScreen {
+    /// Stable per-display identifier (survives an external monitor being unplugged/reconnected,
+    /// unlike CGDirectDisplayID which can be reassigned). nil if unavailable, in which case the
+    /// position for that display simply can't be persisted.
+    var stableDisplayUUIDString: String? {
+        guard let screenNumber = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+            return nil
         }
-        set { set(newValue, forKey: Self.notchOffsetKey) }
+        let displayID = CGDirectDisplayID(screenNumber.uint32Value)
+        guard let uuidRef = CGDisplayCreateUUIDFromDisplayID(displayID) else { return nil }
+        return CFUUIDCreateString(nil, uuidRef.takeRetainedValue()) as String
     }
 }
 
-/// Borderless, non-activating overlay panel that hosts NotchView. Owns placement, show/hide,
-/// and all expand/collapse interaction (click-to-expand, click-outside-to-collapse, auto-expand
-/// on connect with a 4s auto-collapse unless the user interacted).
+/// Borderless, non-activating overlay panel that hosts NotchView. Owns placement (including
+/// per-display, option-drag-adjustable position), show/hide, and all expand/collapse interaction
+/// (click-to-expand, click-outside-to-collapse, auto-expand on connect with a 4s auto-collapse
+/// unless the user interacted).
 @MainActor
 final class NotchPanel: NSPanel {
     private let logger = Logger(subsystem: "com.davidejere.JBLCompanion", category: "NotchPanel")
 
     private let headphoneState: HeadphoneState
     private let uiState = NotchUIState()
+    let positionState = NotchPositionState()
 
     private let collapsedDiameter: CGFloat
     private let expandedSize = CGSize(width: 300, height: 120)
     private let collapseAnimationDuration: TimeInterval = 0.4
+    private let dragThreshold: CGFloat = 3
 
     private var globalMouseMonitor: Any?
     private var localMouseMonitor: Any?
     private var autoCollapseWorkItem: DispatchWorkItem?
+
+    private var currentDisplayUUID: String?
+    private var drag: DragTracker?
+
+    private struct DragTracker {
+        let isOptionDrag: Bool
+        let startMouseLocation: NSPoint // screen coordinates
+        let startPosition: NotchPosition
+        var didExceedThreshold = false
+    }
 
     init(headphoneState: HeadphoneState) {
         self.headphoneState = headphoneState
@@ -126,6 +140,35 @@ final class NotchPanel: NSPanel {
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: item)
     }
 
+    // MARK: - Position (menu-driven)
+
+    func setPosition(_ position: NotchPosition) {
+        guard let screen = currentScreen() else { return }
+        let clamped = PositionClamp.clamp(
+            position,
+            shapeSize: CGSize(width: collapsedDiameter, height: collapsedDiameter),
+            displaySize: screen.frame.size
+        )
+        positionState.position = clamped
+        if let uuid = currentDisplayUUID {
+            NotchPositionStore.save(clamped, forDisplayUUID: uuid, defaults: .standard)
+        }
+        setFrame(forExpanded: uiState.isExpanded)
+    }
+
+    func resetPosition() {
+        guard let screen = currentScreen() else { return }
+        if let uuid = currentDisplayUUID {
+            NotchPositionStore.reset(forDisplayUUID: uuid, defaults: .standard)
+        }
+        positionState.position = PositionClamp.clamp(
+            defaultPosition(for: screen),
+            shapeSize: CGSize(width: collapsedDiameter, height: collapsedDiameter),
+            displaySize: screen.frame.size
+        )
+        setFrame(forExpanded: uiState.isExpanded)
+    }
+
     // MARK: - Placement
 
     @objc private func screenParametersChanged() {
@@ -133,29 +176,68 @@ final class NotchPanel: NSPanel {
     }
 
     func reposition() {
+        guard let screen = currentScreen() else { return }
+        currentDisplayUUID = screen.stableDisplayUUIDString
+
+        let saved = currentDisplayUUID.flatMap { NotchPositionStore.load(forDisplayUUID: $0, defaults: .standard) }
+        let base = saved ?? defaultPosition(for: screen)
+        positionState.position = PositionClamp.clamp(
+            base,
+            shapeSize: CGSize(width: collapsedDiameter, height: collapsedDiameter),
+            displaySize: screen.frame.size
+        )
+
         setFrame(forExpanded: uiState.isExpanded)
     }
 
-    private func setFrame(forExpanded expanded: Bool) {
-        guard let screen = NSScreen.screens.first else { return }
+    private func currentScreen() -> NSScreen? {
+        NSScreen.screens.first
+    }
 
-        let size = expanded ? expandedSize : CGSize(width: collapsedDiameter, height: collapsedDiameter)
-        let menuBarHeight = NSStatusBar.system.thickness
-        let topY = screen.frame.maxY
-
-        let x: CGFloat
+    /// Matches the pre-existing placement rule: beside the notch if there is one, otherwise the
+    /// old fixed centered default. Only used when no saved position exists for this display.
+    private func defaultPosition(for screen: NSScreen) -> NotchPosition {
         if let notch = screen.auxiliaryTopRightArea {
-            x = notch.minX + 4
-        } else {
-            x = screen.frame.midX + UserDefaults.standard.notchOffset
+            return NotchPosition(x: Double(notch.minX + 4 - screen.frame.midX), y: 0)
+        }
+        return .defaultPosition
+    }
+
+    private func setFrame(forExpanded expanded: Bool) {
+        guard let screen = currentScreen() else { return }
+        let displaySize = screen.frame.size
+        let collapsedSize = CGSize(width: collapsedDiameter, height: collapsedDiameter)
+
+        if !expanded {
+            setFrame(NSRect(origin: appKitOrigin(forLocalTopLeft: localTopLeft(for: positionState.position, displaySize: displaySize), size: collapsedSize, on: screen), size: collapsedSize), display: true)
+            return
         }
 
-        // Anchored to the top of the menu bar row; expanding grows downward from there.
-        let anchorTopY = topY
-        let origin = CGPoint(x: x, y: anchorTopY - size.height)
-        _ = menuBarHeight // retained for future vertical centering tweaks; top-anchored for now.
+        // Expanded: horizontally centered under the circle, same top edge (grows downward),
+        // then nudged back on-screen if that would clip past an edge.
+        let circleLocal = localTopLeft(for: positionState.position, displaySize: displaySize)
+        let circleCenterX = circleLocal.x + collapsedSize.width / 2
+        let expandedLocal = CGPoint(x: circleCenterX - expandedSize.width / 2, y: circleLocal.y)
+        let clampedExpandedLocal = RectClamp.clampOrigin(expandedLocal, size: expandedSize, within: displaySize)
 
-        setFrame(NSRect(origin: origin, size: size), display: true)
+        setFrame(
+            NSRect(origin: appKitOrigin(forLocalTopLeft: clampedExpandedLocal, size: expandedSize, on: screen), size: expandedSize),
+            display: true
+        )
+    }
+
+    /// Converts a NotchPosition (offset from display center) to an absolute local top-left point
+    /// (0,0 = this display's own top-left, y increasing downward).
+    private func localTopLeft(for position: NotchPosition, displaySize: CGSize) -> CGPoint {
+        CGPoint(x: displaySize.width / 2 + position.x, y: position.y)
+    }
+
+    /// Converts an absolute local top-left point (same convention as above) into the bottom-left
+    /// NSRect origin AppKit actually needs, in global desktop coordinates.
+    private func appKitOrigin(forLocalTopLeft local: CGPoint, size: CGSize, on screen: NSScreen) -> NSPoint {
+        let globalX = screen.frame.minX + local.x
+        let topEdgeGlobalY = screen.frame.maxY - local.y
+        return NSPoint(x: globalX, y: topEdgeGlobalY - size.height)
     }
 
     // MARK: - Mouse monitors
@@ -166,14 +248,78 @@ final class NotchPanel: NSPanel {
                 self?.handleOutsideClick()
             }
         }
-        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
-            self?.handleLocalClick(event)
+        localMouseMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        ) { [weak self] event in
+            self?.handleLocalEvent(event)
             return event
         }
     }
 
-    private func handleLocalClick(_ event: NSEvent) {
+    private func handleLocalEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown:
+            handleMouseDown(event)
+        case .leftMouseDragged:
+            handleMouseDragged(event)
+        case .leftMouseUp:
+            handleMouseUp(event)
+        default:
+            break
+        }
+    }
+
+    private func handleMouseDown(_ event: NSEvent) {
         guard event.window === self else { return }
+        // Repositioning only applies to the collapsed circle, not the expanded card.
+        let isOptionDrag = event.modifierFlags.contains(.option) && !uiState.isExpanded
+        drag = DragTracker(isOptionDrag: isOptionDrag, startMouseLocation: NSEvent.mouseLocation, startPosition: positionState.position)
+    }
+
+    private func handleMouseDragged(_ event: NSEvent) {
+        guard var tracker = drag else { return }
+        let current = NSEvent.mouseLocation
+        let dx = current.x - tracker.startMouseLocation.x
+        let dy = current.y - tracker.startMouseLocation.y
+
+        // Track "did this exceed the click threshold" regardless of the option key, so ANY drag
+        // (not just an option-drag) suppresses expand/collapse at mouseUp.
+        if !tracker.didExceedThreshold, max(abs(dx), abs(dy)) > dragThreshold {
+            tracker.didExceedThreshold = true
+        }
+
+        guard tracker.isOptionDrag, tracker.didExceedThreshold, let screen = currentScreen() else {
+            drag = tracker
+            return
+        }
+
+        // AppKit screen Y increases upward; our local position's y increases downward, so a
+        // positive on-screen dy (cursor moved up) means the top edge moved up, i.e. position.y decreases.
+        let proposed = NotchPosition(x: tracker.startPosition.x + Double(dx), y: tracker.startPosition.y - Double(dy))
+        let clamped = PositionClamp.clamp(
+            proposed,
+            shapeSize: CGSize(width: collapsedDiameter, height: collapsedDiameter),
+            displaySize: screen.frame.size
+        )
+        positionState.position = clamped
+        setFrame(forExpanded: false)
+        drag = tracker
+    }
+
+    private func handleMouseUp(_ event: NSEvent) {
+        guard let tracker = drag else { return }
+        drag = nil
+
+        if tracker.didExceedThreshold {
+            // Any real drag never expands or collapses, regardless of whether option was held.
+            if tracker.isOptionDrag, let uuid = currentDisplayUUID {
+                NotchPositionStore.save(positionState.position, forDisplayUUID: uuid, defaults: .standard)
+            }
+            return
+        }
+
+        guard event.window === self else { return }
+        // Not a drag — behaves as a plain click (option held or not).
         autoCollapseWorkItem?.cancel()
         autoCollapseWorkItem = nil
         if !uiState.isExpanded {

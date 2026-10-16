@@ -8,6 +8,13 @@ final class NotchUIState {
     var isExpanded: Bool = false
 }
 
+/// Exposes the current display's notch position to the menu's X/Y steppers.
+@Observable
+@MainActor
+final class NotchPositionState {
+    var position: NotchPosition = .defaultPosition
+}
+
 /// One shape that springs between a small collapsed circle and a larger expanded card.
 struct NotchView: View {
     let state: HeadphoneState
