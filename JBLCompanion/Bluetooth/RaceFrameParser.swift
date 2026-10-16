@@ -56,10 +56,12 @@ enum RaceFrameParser {
     }
 }
 
-/// Recognizes the one event type Phase 2a understands; everything else is left for the caller to
-/// log at debug level and ignore.
+/// Recognizes the one event type the app understands; everything else is left for the caller to
+/// log at debug level and ignore. Carries the raw mode byte alongside the mapped NoiseMode so the
+/// caller can specifically flag the one unconfirmed byte value (0x00) without re-deriving the
+/// noise-mode frame shape itself.
 enum RaceEvent: Equatable {
-    case noiseMode(NoiseMode)
+    case noiseMode(NoiseMode, rawByte: UInt8)
 }
 
 enum RaceEventRecognizer {
@@ -71,20 +73,21 @@ enum RaceEventRecognizer {
         guard frame.type == .event, frame.id == noiseModeEventID else { return nil }
         let bytes = [UInt8](frame.payload)
         guard bytes.count == 4, Array(bytes.prefix(3)) == noiseModeEventPrefix else { return nil }
-        return .noiseMode(NoiseMode(raceModeByte: bytes[3]))
+        let rawByte = bytes[3]
+        return .noiseMode(NoiseMode(raceModeByte: rawByte), rawByte: rawByte)
     }
 }
 
 extension NoiseMode {
     /// Maps the mode byte from a noise-mode event (protocol.md §4). `0x00` was only ever observed
-    /// right after a TalkThru command and protocol.md flags its meaning as unconfirmed — mapped to
-    /// .talkThru here as the best available evidence, not a certainty.
+    /// once, right after a TalkThru command, and protocol.md flags its meaning as unconfirmed — it
+    /// maps to `.unknown` here rather than guessing `.talkThru`. The caller logs this specific byte
+    /// value at info level so it's visible without enabling debug logging.
     init(raceModeByte byte: UInt8) {
         switch byte {
         case 0x0A: self = .ambientAware
         case 0x01: self = .off
         case 0x09: self = .anc
-        case 0x00: self = .talkThru
         default: self = .unknown
         }
     }

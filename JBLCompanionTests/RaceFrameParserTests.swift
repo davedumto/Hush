@@ -94,24 +94,24 @@ final class RaceFrameParserTests: XCTestCase {
 
     func testRecognizesAmbientAware() {
         let frame = RaceFrameParser.parseFrames(from: hexData("055C06000109050000" + "0A")).first!
-        XCTAssertEqual(RaceEventRecognizer.recognize(frame), .noiseMode(.ambientAware))
+        XCTAssertEqual(RaceEventRecognizer.recognize(frame), .noiseMode(.ambientAware, rawByte: 0x0A))
     }
 
     func testRecognizesOff() {
         let frame = RaceFrameParser.parseFrames(from: hexData("055C06000109050000" + "01")).first!
-        XCTAssertEqual(RaceEventRecognizer.recognize(frame), .noiseMode(.off))
+        XCTAssertEqual(RaceEventRecognizer.recognize(frame), .noiseMode(.off, rawByte: 0x01))
     }
 
     func testRecognizesANC() {
         let frame = RaceFrameParser.parseFrames(from: hexData("055C06000109050000" + "09")).first!
-        XCTAssertEqual(RaceEventRecognizer.recognize(frame), .noiseMode(.anc))
+        XCTAssertEqual(RaceEventRecognizer.recognize(frame), .noiseMode(.anc, rawByte: 0x09))
     }
 
-    func testRecognizesTalkThruByte() {
-        // protocol.md §4: 0x00 was only ever seen after the TalkThru command; meaning unconfirmed
-        // in the capture, but it's the best available mapping.
+    func testUnconfirmedZeroByteMapsToUnknownNotTalkThru() {
+        // protocol.md §4: 0x00 was only ever seen once, right after a TalkThru command, and its
+        // meaning is explicitly unconfirmed. Must map to .unknown, not guess .talkThru.
         let frame = RaceFrameParser.parseFrames(from: hexData("055C06000109050000" + "00")).first!
-        XCTAssertEqual(RaceEventRecognizer.recognize(frame), .noiseMode(.talkThru))
+        XCTAssertEqual(RaceEventRecognizer.recognize(frame), .noiseMode(.unknown, rawByte: 0x00))
     }
 
     func testDoesNotRecognizeNonEventFrameAsNoiseMode() {
