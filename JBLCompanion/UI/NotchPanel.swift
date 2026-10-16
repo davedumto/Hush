@@ -46,6 +46,11 @@ final class NotchPanel: NSPanel {
     private var geometry: IslandGeometry
     private var currentSize: CGSize
     private var isAnimating = false
+    /// Bumped on every present() call; a stale completion whose generation no longer matches is
+    /// dropped instead of applying its (now outdated) frame/content, which is what let a
+    /// superseded transition leave the window sized for one state while content rendered for
+    /// another — an oversized, seemingly empty shape.
+    private var presentGeneration = 0
 
     private var menuBarMeasurements = MenuBarMeasurements()
     private var globalMouseMonitor: Any?
@@ -347,11 +352,24 @@ final class NotchPanel: NSPanel {
     private func present(expanded: Bool) {
         uiState.isExpanded = expanded
         let target = expanded ? expandedSize(for: geometry) : geometry.collapsedSize
-        guard target != currentSize else { return }
+        guard target != currentSize else {
+            // Nothing to animate — but make sure content is actually visible, in case an earlier,
+            // now-superseded transition left it hidden mid-fade.
+            hosting.animator().alphaValue = 1
+            return
+        }
+
+        presentGeneration += 1
+        let generation = presentGeneration
 
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let envelope = IslandMotion.reservation(IslandMotion.envelope(from: currentSize, to: target), centring: target)
         let start = currentSize
+        // Updated immediately (not just on completion) so a second present() call arriving before
+        // this one finishes compares against where we're actually headed, not the stale
+        // pre-animation size — that staleness is what let a superseded transition's completion
+        // leave the window sized for the wrong state.
+        currentSize = target
 
         contentRevealWorkItem?.cancel()
         hosting.alphaValue = 0
@@ -371,9 +389,8 @@ final class NotchPanel: NSPanel {
             to: target, from: start, startGap: startGap, targetGap: targetGap,
             envelopeSize: envelope, reduceMotion: reduceMotion
         ) { [weak self] in
-            guard let self else { return }
+            guard let self, generation == self.presentGeneration else { return }
             self.isAnimating = false
-            self.currentSize = target
             // 2. Settle the window back down to exactly the target size.
             self.setFrame(self.geometry.frame(for: target), display: true)
             self.layoutContent(for: target, envelopeSize: target)
