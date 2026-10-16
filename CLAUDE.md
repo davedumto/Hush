@@ -20,11 +20,11 @@ macOS menu bar app for JBL Tune headphones (770NC, 670NC). Floating pill expands
 - A mode is shown as active only after a 5C status event. A 5B ack alone is never confirmation.
 - No status event within the 2s timeout: show "no response, kept current mode" (shake, button returns to available, previous mode stays active). Do not implement the guide's "accepted but not echoed" path.
 - "(unverified)" text is driven only by the profile's eventMapVerified (NoiseModeStatusText), never by an ack.
-- Mode button enabled/disabled comes only from the profile's isModeVerified flags. No per-model lists in views. Off has no verified frame, so it shows disabled with SOON.
+- Mode button enabled/disabled comes only from the profile's isModeVerified flags. No per-model lists in views. A mode with no verified command frame (currently Off on both models, unless the profile says otherwise) shows disabled with SOON, resolved from isModeVerified.
 - Model names, photos and model numbers come from the matched profile. Unknown JBL models use the generic mark with no photo.
 - The pending ring and shake are driven by NoiseModeRequestCoordinator state and its 2s timeout, not a separate timer.
 - Hardware-initiated mode changes apply with no pending step.
-- The 670NC shows the note row "Controls not available for this model yet".
+- Controls availability and the "Controls not available for this model yet" note row are driven only by the matched profile's flags (supportsNoiseControl, isModeVerified, allowsRFCOMMWrites). Never hardcode per-model behavior in views. Today's per-model state is whatever the profile code says; read the profile files before assuming.
 - The panel must never steal focus.
 - Keep the Debug-only "Send test frame…" menu item and Copy Diagnostics working.
 
