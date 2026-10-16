@@ -4,12 +4,19 @@ import XCTest
 
 @MainActor
 private final class FakeRaceWriteTransport: RaceWriteTransport {
-    var isReadyForRaceWrites: Bool
+    /// Independently settable, matching BLEBatteryLink's own three sub-conditions, so tests can
+    /// drive connect/subscribe/write-char-discovered/disconnect/reconnect transitions one at a
+    /// time instead of only flipping a single combined "ready" bool.
+    var isPeripheralConnected: Bool
+    var isRaceNotifySubscribed: Bool
     var raceWriteCharacteristicUUID: CBUUID?
     private(set) var writtenPayloads: [Data] = []
 
+    var isReadyForRaceWrites: Bool { isPeripheralConnected && isRaceNotifySubscribed }
+
     init(ready: Bool = true, characteristicUUID: CBUUID? = CBUUID(string: "43484152-2DAB-3241-6972-6F6861424C45")) {
-        isReadyForRaceWrites = ready
+        isPeripheralConnected = ready
+        isRaceNotifySubscribed = ready
         raceWriteCharacteristicUUID = characteristicUUID
     }
 
@@ -69,6 +76,68 @@ final class NoiseControlCommanderTests: XCTestCase {
         let commander = makeCommander(transport: transport)
         _ = commander.setMode(.anc)
         XCTAssertEqual(transport.writtenPayloads.count, 1)
+    }
+}
+
+// MARK: - Readiness state transitions (connect, subscribe, write char discovered, disconnect, reconnect)
+
+@MainActor
+final class NoiseControlCommanderReadinessTransitionTests: XCTestCase {
+    private func makeCommander(transport: FakeRaceWriteTransport, now: @escaping () -> Date = Date.init) -> NoiseControlCommander {
+        let profile = Tune770NCProfile()
+        let writeGuard = WriteGuard(allowlist: profile.writeAllowlist)
+        return NoiseControlCommander(profile: profile, writeGuard: writeGuard, transport: transport, now: now)
+    }
+
+    /// All three sub-conditions (peripheral connected, RACE notify subscription confirmed, write
+    /// characteristic discovered) must be true before a command can go out — refused if any one
+    /// of them isn't, not just when none are.
+    func testRefusesUntilAllThreeSubConditionsAreTrue() {
+        let transport = FakeRaceWriteTransport(ready: false, characteristicUUID: nil)
+        let commander = makeCommander(transport: transport)
+
+        // Disconnected: nothing is true yet.
+        XCTAssertFalse(commander.setMode(.anc))
+
+        // "Connect": the peripheral is connected, but RACE service discovery/subscription hasn't
+        // happened yet.
+        transport.isPeripheralConnected = true
+        XCTAssertFalse(commander.setMode(.anc))
+
+        // Write characteristic discovered, but the notify subscription isn't confirmed yet.
+        transport.raceWriteCharacteristicUUID = CBUUID(string: "43484152-2DAB-3241-6972-6F6861424C45")
+        XCTAssertFalse(commander.setMode(.anc))
+
+        // Notify subscription confirmed — now all three are true, and the command goes through.
+        transport.isRaceNotifySubscribed = true
+        XCTAssertTrue(commander.setMode(.anc))
+        XCTAssertEqual(transport.writtenPayloads, [CommandableNoiseMode.anc.commandFrame])
+    }
+
+    /// A disconnect must revoke readiness, and readiness must come back once reconnect/rediscovery
+    /// finishes — a stale "still ready" or a permanently-stuck "never ready again" would both be
+    /// bugs the commander should never paper over.
+    func testDisconnectRevokesReadinessUntilReconnectRestoresIt() {
+        let transport = FakeRaceWriteTransport(ready: true)
+        var now = Date(timeIntervalSince1970: 0)
+        let commander = makeCommander(transport: transport, now: { now })
+
+        XCTAssertTrue(commander.setMode(.off))
+
+        // Disconnect: a fresh RACE discovery on reconnect would clear all three sub-conditions.
+        transport.isPeripheralConnected = false
+        transport.isRaceNotifySubscribed = false
+        transport.raceWriteCharacteristicUUID = nil
+        now = now.addingTimeInterval(1) // past the 500ms rate limit, so this isn't what refuses it
+        XCTAssertFalse(commander.setMode(.anc))
+
+        // Reconnect: everything is rediscovered and reconfirmed.
+        transport.isPeripheralConnected = true
+        transport.isRaceNotifySubscribed = true
+        transport.raceWriteCharacteristicUUID = CBUUID(string: "43484152-2DAB-3241-6972-6F6861424C45")
+        now = now.addingTimeInterval(1)
+        XCTAssertTrue(commander.setMode(.anc))
+        XCTAssertEqual(transport.writtenPayloads, [CommandableNoiseMode.off.commandFrame, CommandableNoiseMode.anc.commandFrame])
     }
 }
 

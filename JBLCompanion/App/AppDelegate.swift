@@ -61,6 +61,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func requestNoiseMode(_ mode: CommandableNoiseMode) {
         noiseModeCoordinator.requestMode(mode)
     }
+
+    /// Plain-text snapshot of the noise-control link's state, for the "Copy Diagnostics" menu
+    /// item. Read-only — only reads already-tracked state, never touches the headphones.
+    func diagnosticsText() -> String {
+        let dateFormat: (Date?) -> String = { date in
+            guard let date else { return "never" }
+            return date.formatted(date: .abbreviated, time: .standard)
+        }
+
+        return """
+        JBLCompanion diagnostics
+        Readiness: connected=\(bleLink.isPeripheralConnected) subscribed=\(bleLink.isRaceNotifySubscribed) writeChar=\(bleLink.raceWriteCharacteristicUUID != nil)
+        Noise mode: \(headphoneState.noiseMode.displayText)
+        Pending noise mode: \(headphoneState.pendingNoiseMode?.displayText ?? "none")
+        Last RACE notification: \(bleLink.lastRaceNotificationHex ?? "none") at \(dateFormat(bleLink.lastRaceNotificationAt))
+        Last RACE write: \(bleLink.lastRaceWriteHex ?? "none") at \(dateFormat(bleLink.lastRaceWriteAt))
+        """
+    }
 }
 
 extension AppDelegate: ClassicConnectionMonitorDelegate {

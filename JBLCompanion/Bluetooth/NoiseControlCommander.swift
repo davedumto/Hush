@@ -22,6 +22,13 @@ protocol RaceWriteTransport: AnyObject {
     /// True only once the link is connected AND the RACE notify subscription is confirmed active
     /// (CBPeripheral delegate's didUpdateNotificationStateFor, not just "we called setNotifyValue").
     var isReadyForRaceWrites: Bool { get }
+    /// The peripheral-connected sub-condition of `isReadyForRaceWrites`, exposed on its own purely
+    /// for diagnostics — so a refusal can say exactly which sub-condition is false instead of just
+    /// "not ready."
+    var isPeripheralConnected: Bool { get }
+    /// The RACE-notify-subscription-confirmed sub-condition of `isReadyForRaceWrites`, exposed on
+    /// its own for the same reason.
+    var isRaceNotifySubscribed: Bool { get }
     /// The actually-discovered write-without-response characteristic's UUID, or nil if not ready.
     /// Checked against WriteGuard's allowlist rather than assuming it matches what's hardcoded there.
     var raceWriteCharacteristicUUID: CBUUID? { get }
@@ -71,7 +78,12 @@ final class NoiseControlCommander: NoiseModeSending {
         }
 
         guard let transport, transport.isReadyForRaceWrites, let characteristicUUID = transport.raceWriteCharacteristicUUID else {
-            logger.error("Refusing noise-mode command: BLE link not ready")
+            let connected = transport?.isPeripheralConnected ?? false
+            let subscribed = transport?.isRaceNotifySubscribed ?? false
+            let hasWriteChar = transport?.raceWriteCharacteristicUUID != nil
+            logger.info(
+                "Refusing noise-mode command: link not ready: connected=\(connected, privacy: .public) subscribed=\(subscribed, privacy: .public) writeChar=\(hasWriteChar, privacy: .public)"
+            )
             return false
         }
 

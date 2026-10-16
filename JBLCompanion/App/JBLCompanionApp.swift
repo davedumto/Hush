@@ -32,6 +32,11 @@ struct JBLCompanionApp: App {
         Divider()
         Toggle("Show notch circle", isOn: $showNotchCircle)
         IslandSettingsMenuButton()
+        Button("Copy Diagnostics") {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(appDelegate.diagnosticsText(), forType: .string)
+        }
         Divider()
         Button("Quit") { NSApplication.shared.terminate(nil) }
             .keyboardShortcut("q")
