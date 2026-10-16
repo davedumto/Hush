@@ -27,3 +27,28 @@ targets:
         CODE_SIGN_IDENTITY: "-"
         ENABLE_HARDENED_RUNTIME: NO
         ENABLE_APP_SANDBOX: NO
+  JBLCompanionTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: JBLCompanionTests
+    dependencies:
+      - target: JBLCompanion
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  JBLCompanion:
+    build:
+      targets:
+        JBLCompanion: all
+        JBLCompanionTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - JBLCompanionTests
