@@ -52,6 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        verifyRequiredFonts()
+
         // Created first, before anything else in this method that could fail — a plain AppKit
         // NSStatusItem is about as close to guaranteed-to-work as menu bar UI gets, unlike
         // SwiftUI's MenuBarExtra (JBLCompanionApp), so this exists specifically so the app is
@@ -72,6 +74,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         classicMonitor.start()
         logger.info("JBLCompanion launched; watching for: \(self.profiles.map(\.displayName).joined(separator: ", "), privacy: .public)")
+    }
+
+    /// RequiredFonts.postScriptNames (design/DESIGN_GUIDE.md §2) should already be registered via
+    /// ATSApplicationFontsPath (project.yml) by the time this runs — this only verifies that
+    /// actually happened and logs a warning per name that didn't resolve, rather than silently
+    /// falling back to the system font everywhere Theme.Fonts is used.
+    private func verifyRequiredFonts() {
+        let unresolved = RequiredFonts.unresolved(resolves: { NSFont(name: $0, size: 12) != nil })
+        for name in unresolved {
+            logger.warning("Required font did not resolve at runtime: \(name, privacy: .public)")
+        }
     }
 
     // MARK: - AppKit status-item fallback (always present — see applicationDidFinishLaunching)
