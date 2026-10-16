@@ -90,36 +90,52 @@ final class RaceFrameParserTests: XCTestCase {
         XCTAssertTrue(RaceFrameParser.parseFrames(from: badType).isEmpty)
     }
 
-    // MARK: - Noise-mode event recognition (protocol.md §4, live-reconfirmed 2026-10-16 mapping)
+    // MARK: - Noise-mode event recognition (protocol.md §4; extracts the raw byte only — mapping
+    // it to a NoiseMode is per-profile now, see DeviceProfileEventMapTests/StandardRaceEventByteMap)
 
     func testRecognizesOff() {
         // Live-confirmed: user set the headphones to Off (neither ANC, Ambient, nor TalkThru
         // active) and the device reported 0x00.
         let frame = RaceFrameParser.parseFrames(from: hexData("055C06000109050000" + "00")).first!
-        XCTAssertEqual(RaceEventRecognizer.recognize(frame), .noiseMode(.off, rawByte: 0x00))
+        XCTAssertEqual(RaceEventRecognizer.recognize(frame), .noiseMode(rawByte: 0x00))
     }
 
     func testRecognizesANC() {
         // Live-confirmed: user had ANC physically on; device reported 0x01.
         let frame = RaceFrameParser.parseFrames(from: hexData("055C06000109050000" + "01")).first!
-        XCTAssertEqual(RaceEventRecognizer.recognize(frame), .noiseMode(.anc, rawByte: 0x01))
+        XCTAssertEqual(RaceEventRecognizer.recognize(frame), .noiseMode(rawByte: 0x01))
     }
 
     func testRecognizesTalkThru() {
         // Live-confirmed: user had TalkThru physically active; device reported 0x09.
         let frame = RaceFrameParser.parseFrames(from: hexData("055C06000109050000" + "09")).first!
-        XCTAssertEqual(RaceEventRecognizer.recognize(frame), .noiseMode(.talkThru, rawByte: 0x09))
+        XCTAssertEqual(RaceEventRecognizer.recognize(frame), .noiseMode(rawByte: 0x09))
     }
 
     func testRecognizesAmbientAware() {
         // Unchanged from the original capture — never disputed by the live re-test.
         let frame = RaceFrameParser.parseFrames(from: hexData("055C06000109050000" + "0A")).first!
-        XCTAssertEqual(RaceEventRecognizer.recognize(frame), .noiseMode(.ambientAware, rawByte: 0x0A))
+        XCTAssertEqual(RaceEventRecognizer.recognize(frame), .noiseMode(rawByte: 0x0A))
     }
 
-    func testUnknownByteMapsToUnknown() {
+    func testRecognizesAnyByteIncludingUnmappedOnes() {
+        // recognize() only extracts the raw byte now — it never judges whether the byte is a
+        // known mode, so even 0xFF is still "recognized" as a noise-mode event.
         let frame = RaceFrameParser.parseFrames(from: hexData("055C06000109050000" + "FF")).first!
-        XCTAssertEqual(RaceEventRecognizer.recognize(frame), .noiseMode(.unknown, rawByte: 0xFF))
+        XCTAssertEqual(RaceEventRecognizer.recognize(frame), .noiseMode(rawByte: 0xFF))
+    }
+
+    // MARK: - StandardRaceEventByteMap (the 770NC's hardware-verified mapping)
+
+    func testStandardByteMapMatchesHardwareVerifiedValues() {
+        XCTAssertEqual(StandardRaceEventByteMap.noiseMode(forEventByte: 0x00), .off)
+        XCTAssertEqual(StandardRaceEventByteMap.noiseMode(forEventByte: 0x01), .anc)
+        XCTAssertEqual(StandardRaceEventByteMap.noiseMode(forEventByte: 0x09), .talkThru)
+        XCTAssertEqual(StandardRaceEventByteMap.noiseMode(forEventByte: 0x0A), .ambientAware)
+    }
+
+    func testStandardByteMapTreatsAnyOtherByteAsUnknown() {
+        XCTAssertEqual(StandardRaceEventByteMap.noiseMode(forEventByte: 0xFF), .unknown)
     }
 
     func testDoesNotRecognizeNonEventFrameAsNoiseMode() {

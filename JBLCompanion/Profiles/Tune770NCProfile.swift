@@ -14,9 +14,17 @@ struct Tune770NCProfile: DeviceProfile {
     let batteryLevelUUID = CBUUID(string: "2A19")
 
     let supportsNoiseControl = true
+    let allowsRFCOMMWrites = true
 
     // SDP-confirmed (~/jbl-recon/sdp_output_rfcomm_check.txt): the "Airoha_APP" service, channel 21.
     let raceRFCOMMChannelID: BluetoothRFCOMMChannelID = 21
+
+    // Hardware-verified (RaceFrameParser.StandardRaceEventByteMap's own doc comment) — this model
+    // is the one the mapping was actually confirmed against.
+    let eventMapVerified = true
+    func noiseMode(forEventByte byte: UInt8) -> NoiseMode {
+        StandardRaceEventByteMap.noiseMode(forEventByte: byte)
+    }
 
     // Hardware-verified (see NoiseControlCommander.commandFrame's own doc comment): Ambient, ANC,
     // and TalkThru are all independently confirmed, by sending each frame and checking both the

@@ -26,9 +26,17 @@ protocol RFCOMMRaceLinkDelegate: AnyObject {
 @MainActor
 final class RFCOMMRaceLink: NSObject {
     private let logger = Logger(subsystem: "com.davidejere.JBLCompanion", category: "RFCOMMRaceLink")
+    private let profile: DeviceProfile
     private let classicAddress: String
     private let channelID: BluetoothRFCOMMChannelID
     private let reassembler = RaceStreamReassembler()
+
+    /// Whether `performRaceWrite` is ever allowed to actually write, mirrored from
+    /// `profile.allowsRFCOMMWrites` at init time. Checked first, ahead of readiness, so a
+    /// profile with no verified writes refuses every attempt in code — not merely because
+    /// WriteGuard's allowlist happens to be empty. Internal (not private) so tests can read it
+    /// directly without needing to fake a real, ready channel.
+    let allowsWrites: Bool
 
     private var channel: IOBluetoothRFCOMMChannel?
     private var isClassicLinkUp = false
@@ -51,8 +59,10 @@ final class RFCOMMRaceLink: NSObject {
     /// operations should rely on, since it can be nil or stale for a unit DeviceProfileMatcher
     /// still recognized purely by name.
     init(profile: DeviceProfile, classicAddress: String) {
+        self.profile = profile
         self.classicAddress = classicAddress
         self.channelID = profile.raceRFCOMMChannelID
+        self.allowsWrites = profile.allowsRFCOMMWrites
         super.init()
     }
 
@@ -137,8 +147,11 @@ final class RFCOMMRaceLink: NSObject {
                 continue
             }
             switch event {
-            case .noiseMode(let mode, let rawByte):
-                logger.info("Noise mode event: \(String(describing: mode), privacy: .public) rawByte=0x\(String(format: "%02X", rawByte), privacy: .public)")
+            case .noiseMode(let rawByte):
+                let mode = profile.noiseMode(forEventByte: rawByte)
+                logger.info(
+                    "Noise mode event: \(String(describing: mode), privacy: .public) rawByte=0x\(String(format: "%02X", rawByte), privacy: .public) eventMapVerified=\(self.profile.eventMapVerified, privacy: .public)"
+                )
                 delegate?.rfcommRaceLink(self, didUpdateNoiseMode: mode)
             }
         }
@@ -202,6 +215,10 @@ extension RFCOMMRaceLink: RaceWriteTransport {
     }
 
     func performRaceWrite(_ payload: Data) -> Bool {
+        guard allowsWrites else {
+            logger.error("Refusing RFCOMM write: this profile does not allow writes")
+            return false
+        }
         guard isReadyForRaceWrites, let channel else { return false }
         var bytes = [UInt8](payload)
         let count = UInt16(bytes.count)

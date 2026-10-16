@@ -18,7 +18,11 @@ struct GenericProfile: DeviceProfile {
     let batteryLevelUUID = CBUUID(string: "2A19")
 
     let supportsNoiseControl = false
+    let allowsRFCOMMWrites = false
     let raceRFCOMMChannelID: BluetoothRFCOMMChannelID = 0
 
     let writeAllowlist: [WriteAllowlistEntry] = []
+
+    let eventMapVerified = false
+    func noiseMode(forEventByte byte: UInt8) -> NoiseMode { .unknown }
 }

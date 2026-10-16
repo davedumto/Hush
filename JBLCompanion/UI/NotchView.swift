@@ -193,7 +193,7 @@ struct NotchView: View {
             }
             .foregroundStyle(.orange)
         case (nil, false):
-            Text(state.noiseMode.displayText)
+            Text(NoiseModeStatusText.format(mode: state.noiseMode, eventMapVerified: state.noiseModeEventMapVerified))
                 .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.5))
         }

@@ -21,15 +21,27 @@ struct Tune670NCProfile: DeviceProfile {
     let batteryServiceUUID = CBUUID(string: "180F")
     let batteryLevelUUID = CBUUID(string: "2A19")
 
-    // No control writes for this model yet. The Airoha_APP RFCOMM channel (21) is SDP-confirmed
-    // present (~/jbl-recon/classic_670nc_output.txt), but supportsNoiseControl = false means
-    // AppDelegate never tells RFCOMMRaceLink to open it for this profile — RFCOMM listening for
-    // the 670NC is deliberately deferred to a later branch once hardware-captured frames are
-    // verified. The empty allowlist below is belt-and-suspenders: even a stray write attempt
-    // would still be rejected.
+    // No control writes for this model. The Airoha_APP RFCOMM channel (21, SDP-confirmed present
+    // in ~/jbl-recon/classic_670nc_output.txt) IS opened for this profile now, to listen for
+    // status — see AppDelegate's classic-connect handler — but allowsRFCOMMWrites = false means
+    // RFCOMMRaceLink refuses every write attempt in code, and the empty allowlist below is
+    // belt-and-suspenders on top of that.
     let supportsNoiseControl = false
+    let allowsRFCOMMWrites = false
     let raceRFCOMMChannelID: BluetoothRFCOMMChannelID = 21
     let writeAllowlist: [WriteAllowlistEntry] = []
+
+    // Read-only RFCOMM capture (~/jbl-recon/rfcomm_quick_capture_670nc.swift, runs 1-2) confirmed
+    // ANC (rawByte 0x01) and Ambient Aware (rawByte 0x0A) match the 770NC's event mapping exactly,
+    // while the headphones' own on-device mode was independently known from the user setting it
+    // by hand before each capture. Off (0x00) and TalkThru (0x09) were never captured — on the
+    // user's call, the full map is carried over from the 770NC's StandardRaceEventByteMap as a
+    // starting assumption rather than independently confirmed, hence eventMapVerified = false:
+    // the card shows an "(unverified)" suffix (NoiseModeStatusText) until that's closed out.
+    let eventMapVerified = false
+    func noiseMode(forEventByte byte: UInt8) -> NoiseMode {
+        StandardRaceEventByteMap.noiseMode(forEventByte: byte)
+    }
 
     // The one BLE battery read captured during recon came back 0% alongside clearly-placeholder
     // Device Information strings (Model Number "AIROHA-DIS-EXAMPLE", Hardware/Software Revision

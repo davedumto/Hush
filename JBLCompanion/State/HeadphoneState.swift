@@ -67,6 +67,9 @@ final class HeadphoneState {
     /// "--" in the card — distinct from `batteryPercent == nil`, which means no reading at all.
     var batteryPercentIsUnverifiedZero: Bool = false
     var noiseMode: NoiseMode = .unknown
+    /// Mirrors the connected profile's DeviceProfile.eventMapVerified — true (no warning) while
+    /// disconnected. NoiseModeStatusText appends "(unverified)" to the status line while false.
+    var noiseModeEventMapVerified: Bool = true
     var lastUpdated: Date?
 
     /// Non-nil while a noise-mode command has been sent but not yet confirmed by the headphones.

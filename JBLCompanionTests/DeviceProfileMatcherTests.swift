@@ -13,8 +13,11 @@ private struct FakeProfile: DeviceProfile {
     let batteryServiceUUID = CBUUID(string: "180F")
     let batteryLevelUUID = CBUUID(string: "2A19")
     let supportsNoiseControl = false
+    let allowsRFCOMMWrites = false
     let raceRFCOMMChannelID: BluetoothRFCOMMChannelID = 0
     let writeAllowlist: [WriteAllowlistEntry] = []
+    let eventMapVerified = false
+    func noiseMode(forEventByte byte: UInt8) -> NoiseMode { .unknown }
 }
 
 final class DeviceProfileMatcherTests: XCTestCase {

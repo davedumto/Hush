@@ -61,7 +61,7 @@ struct JBLCompanionApp: App {
         } else if state.noiseModeConfirmationTimedOut {
             Text("Noise mode: no confirmation")
         } else {
-            Text("Noise mode: \(state.noiseMode.displayText)")
+            Text("Noise mode: \(NoiseModeStatusText.format(mode: state.noiseMode, eventMapVerified: state.noiseModeEventMapVerified))")
         }
         ForEach(CommandableNoiseMode.allCases, id: \.self) { mode in
             Button(mode.displayText) { appDelegate.requestNoiseMode(mode) }

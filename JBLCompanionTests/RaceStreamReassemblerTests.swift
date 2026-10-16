@@ -27,8 +27,8 @@ final class RaceStreamReassemblerTests: XCTestCase {
         let frames = reassembler.feed(chunk)
 
         XCTAssertEqual(frames.count, 2)
-        XCTAssertEqual(RaceEventRecognizer.recognize(frames[0]), .noiseMode(.ambientAware, rawByte: 0x0A))
-        XCTAssertEqual(RaceEventRecognizer.recognize(frames[1]), .noiseMode(.anc, rawByte: 0x01))
+        XCTAssertEqual(RaceEventRecognizer.recognize(frames[0]), .noiseMode(rawByte: 0x0A))
+        XCTAssertEqual(RaceEventRecognizer.recognize(frames[1]), .noiseMode(rawByte: 0x01))
         XCTAssertTrue(reassembler.pendingBytes.isEmpty)
     }
 
@@ -56,7 +56,7 @@ final class RaceStreamReassemblerTests: XCTestCase {
 
         let secondResult = reassembler.feed(Data(secondHalf))
         XCTAssertEqual(secondResult.count, 1)
-        XCTAssertEqual(RaceEventRecognizer.recognize(secondResult[0]), .noiseMode(.ambientAware, rawByte: 0x0A))
+        XCTAssertEqual(RaceEventRecognizer.recognize(secondResult[0]), .noiseMode(rawByte: 0x0A))
         XCTAssertTrue(reassembler.pendingBytes.isEmpty)
     }
 
@@ -70,7 +70,7 @@ final class RaceStreamReassemblerTests: XCTestCase {
         }
 
         XCTAssertEqual(lastResult.count, 1, "the frame should only complete on the very last byte")
-        XCTAssertEqual(RaceEventRecognizer.recognize(lastResult[0]), .noiseMode(.ambientAware, rawByte: 0x0A))
+        XCTAssertEqual(RaceEventRecognizer.recognize(lastResult[0]), .noiseMode(rawByte: 0x0A))
         XCTAssertTrue(reassembler.pendingBytes.isEmpty)
     }
 

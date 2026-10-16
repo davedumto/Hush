@@ -57,10 +57,11 @@ enum RaceFrameParser {
 }
 
 /// Recognizes the one event type the app understands; everything else is left for the caller to
-/// log at debug level and ignore. Carries the raw mode byte alongside the mapped NoiseMode so the
-/// caller can log the exact byte independent of how it's mapped.
+/// log at debug level and ignore. Only extracts the raw mode byte — mapping it to a NoiseMode is
+/// per-profile (DeviceProfile.noiseMode(forEventByte:)), not this parser's job, since a different
+/// model could in principle assign different bytes even over an identical wire format.
 enum RaceEvent: Equatable {
-    case noiseMode(NoiseMode, rawByte: UInt8)
+    case noiseMode(rawByte: UInt8)
 }
 
 enum RaceEventRecognizer {
@@ -72,26 +73,30 @@ enum RaceEventRecognizer {
         guard frame.type == .event, frame.id == noiseModeEventID else { return nil }
         let bytes = [UInt8](frame.payload)
         guard bytes.count == 4, Array(bytes.prefix(3)) == noiseModeEventPrefix else { return nil }
-        let rawByte = bytes[3]
-        return .noiseMode(NoiseMode(raceModeByte: rawByte), rawByte: rawByte)
+        return .noiseMode(rawByte: bytes[3])
     }
 }
 
-extension NoiseMode {
-    /// Maps the mode byte from a noise-mode event. Live-reconfirmed 2026-10-16 over the Airoha_APP
-    /// RFCOMM channel (protocol.md §4 correction): the user physically set each mode on the
-    /// headphones in turn and confirmed it in the same message as the capture, superseding the
-    /// original iPad-capture-derived mapping (which had Off=0x01, ANC=0x09, and treated 0x00 as
-    /// unconfirmed/possibly TalkThru). This mapping is the live-confirmed *event* byte only — the
-    /// *command* bytes used to request a mode (NoiseControlCommander.commandFrame) are a separate,
-    /// still-unverified question; see that file's own doc comment.
-    init(raceModeByte byte: UInt8) {
+/// The one hardware-verified RACE noise-mode event-byte mapping known so far, confirmed on the
+/// 770NC. Live-reconfirmed 2026-10-16 over the Airoha_APP RFCOMM channel: the user physically set
+/// each mode on the headphones in turn and confirmed it in the same message as the capture,
+/// superseding the original iPad-capture-derived mapping (which had Off=0x01, ANC=0x09, and
+/// treated 0x00 as unconfirmed/possibly TalkThru). This is the *event* byte mapping only — the
+/// *command* bytes used to request a mode (NoiseControlCommander.commandFrame) are a separate,
+/// independently-verified question; see that file's own doc comment.
+///
+/// A DeviceProfile whose own hardware hasn't been independently checked (e.g. Tune670NCProfile)
+/// can still delegate its own `noiseMode(forEventByte:)` to this shared map as a starting
+/// assumption, rather than duplicating the switch — `eventMapVerified` is what actually records
+/// whether that assumption has been confirmed for that model's own hardware.
+enum StandardRaceEventByteMap {
+    static func noiseMode(forEventByte byte: UInt8) -> NoiseMode {
         switch byte {
-        case 0x00: self = .off
-        case 0x01: self = .anc
-        case 0x09: self = .talkThru
-        case 0x0A: self = .ambientAware
-        default: self = .unknown
+        case 0x00: return .off
+        case 0x01: return .anc
+        case 0x09: return .talkThru
+        case 0x0A: return .ambientAware
+        default: return .unknown
         }
     }
 }

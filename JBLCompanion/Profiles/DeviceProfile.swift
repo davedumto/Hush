@@ -35,11 +35,19 @@ protocol DeviceProfile {
     var batteryServiceUUID: CBUUID { get }
     var batteryLevelUUID: CBUUID { get }
 
-    /// Whether this model's noise control is wired up at all. Besides describing the device, this
-    /// gates whether RFCOMMRaceLink is even allowed to attempt opening the RACE RFCOMM channel on
-    /// connect (see AppDelegate's classic-connect handler) — a profile with no verified command
-    /// frames must never have that channel opened on its behalf.
+    /// Whether this model's noise control is wired up at all — purely a UI gate (NotchView shows
+    /// "Controls not available for this model yet" when false) independent of whether RFCOMM is
+    /// opened at all. The RACE channel is opened for ANY matched profile now, to listen for status
+    /// (see AppDelegate's classic-connect handler); whether writes are ever attempted through it is
+    /// `allowsRFCOMMWrites`'s job, not this one's.
     var supportsNoiseControl: Bool { get }
+
+    /// Whether RFCOMMRaceLink is ever allowed to write a payload for this profile, enforced inside
+    /// RFCOMMRaceLink itself (see `performRaceWrite`) — not just by an empty WriteGuard allowlist.
+    /// False means every write attempt is refused in code, regardless of what WriteGuard would
+    /// otherwise allow; a profile with no verified command frames (like Tune670NCProfile) must
+    /// set this false so the channel can still be opened read-only to listen for status.
+    var allowsRFCOMMWrites: Bool { get }
 
     /// Whether a 0% battery reading from this device's hardware is trustworthy as a real "empty"
     /// reading, as opposed to a placeholder/stub value from e.g. unflashed reference firmware.
@@ -55,6 +63,21 @@ protocol DeviceProfile {
     /// WriteGuard's allowlist for this device. Empty means every write is rejected. Expected to be
     /// derived from `isModeVerified`, not hand-maintained separately from it.
     var writeAllowlist: [WriteAllowlistEntry] { get }
+
+    /// Maps a RACE noise-mode event's raw mode byte (RaceEvent.noiseMode's rawByte) to a
+    /// NoiseMode. Per-profile, not global, because a different model could in principle assign
+    /// different bytes even over an identical wire format — see `eventMapVerified` for whether
+    /// this mapping has actually been checked for this exact model, or is only carried over from
+    /// a similar one. StandardRaceEventByteMap holds the one hardware-verified mapping known so
+    /// far (the 770NC's); a conformer delegates to it rather than duplicating the switch.
+    func noiseMode(forEventByte byte: UInt8) -> NoiseMode
+
+    /// Whether `noiseMode(forEventByte:)` has been independently hardware-verified for this exact
+    /// model (by sending/observing real events and confirming both the byte and the physical
+    /// behavior), as opposed to being a starting assumption carried over from a similar model's
+    /// mapping. NotchView appends "(unverified)" to the noise-mode status text while this is
+    /// false (NoiseModeStatusText).
+    var eventMapVerified: Bool { get }
 
     /// Whether the command frame for `mode` is independently verified to actually produce that
     /// mode on real hardware, as opposed to merely being captured from the official app with a

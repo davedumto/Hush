@@ -20,7 +20,9 @@ protocol ClassicConnectionMonitorDelegate: AnyObject {
 /// own doc comment) specifically to catch a device that was already connected before this process
 /// started — notifications only fire on a *new* connect event, so a device that's been connected
 /// since before launch produces no notification at all. Whichever signal reports the connection
-/// first wins; `attach(to:match:)` is idempotent against the other one arriving late.
+/// first wins; `attach(to:match:)` is idempotent against the other one arriving late. If a second,
+/// different known device connects while one is already attached, `shouldSwitch` makes the newer
+/// one the active one — most recently connected wins.
 ///
 /// @MainActor so it can hold the MainActor-isolated poller directly. Confirmed by a real crash
 /// (EXC_BREAKPOINT in MainActor.assumeIsolated, 2026-10-16) that IOBluetoothUserNotification
@@ -104,15 +106,31 @@ final class ClassicConnectionMonitor: NSObject {
         }
     }
 
+    /// True whenever there's no device currently attached, or the newly-connected device's
+    /// address differs from the one we're currently attached to — i.e. whether this connect event
+    /// should switch our attention to it. A device reconnecting (or its notification simply
+    /// firing twice) while it's already the attached one is a no-op, not a "switch." If two
+    /// different known devices are both connected, the one that connects (or reconnects) most
+    /// recently always becomes the active one. Pure string comparison, testable without a real
+    /// IOBluetoothDevice.
+    nonisolated static func shouldSwitch(from currentAddress: String?, to newAddress: String) -> Bool {
+        guard let currentAddress else { return true }
+        return normalize(currentAddress) != normalize(newAddress)
+    }
+
     private func attach(to device: IOBluetoothDevice, match: DeviceProfileMatcher.Match) {
-        guard connectedDevice == nil else { return }
+        let address = device.addressString ?? "unknown"
+        guard Self.shouldSwitch(from: connectedDevice?.addressString, to: address) else { return }
+        if connectedDevice != nil {
+            logger.info("A different classic device connected; switching the active device to \(match.profile.displayName, privacy: .public) (most recently connected wins)")
+        }
         poller?.stop()
+        disconnectNotification?.unregister()
         connectedDevice = device
         disconnectNotification = device.register(
             forDisconnectNotification: self,
             selector: #selector(handleDisconnectNotification(notification:device:))
         )
-        let address = device.addressString ?? "unknown"
         logger.info(
             "Classic device connected: \(address, privacy: .public) matched profile=\(match.profile.displayName, privacy: .public) nameMatch=\(match.profile.classicNameMatch, privacy: .public) addressConfirmed=\(match.addressConfirmed, privacy: .public)"
         )

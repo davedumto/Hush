@@ -201,6 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         RFCOMM open retry count: \(session.rfcommLink.openRetryCount)
         Last frames received: \(session.rfcommLink.recentFrameDescriptions.isEmpty ? "none" : session.rfcommLink.recentFrameDescriptions.joined(separator: " | "))
         Reassembler stats: \(session.rfcommLink.reassemblerStatsDescription)
+        Event map verified: \(session.profile.eventMapVerified)
         Noise mode: \(headphoneState.noiseMode.displayText)
         Pending noise mode: \(headphoneState.pendingNoiseMode?.displayText ?? "none")
         """
@@ -216,6 +217,19 @@ extension AppDelegate: ClassicConnectionMonitorDelegate {
             "Classic connect: matched profile=\(profile.displayName, privacy: .public) because classicNameMatch=\(profile.classicNameMatch, privacy: .public) addressConfirmed=\(addressConfirmed, privacy: .public)"
         )
 
+        // ClassicConnectionMonitor only calls this again for a genuinely different device
+        // (shouldSwitch), so a previous session here means a second, different headset just
+        // connected — most recently connected wins: the old session is fully torn down (BLE
+        // stopped, RFCOMM closed) before the new one takes over, so nothing is ever sent to it
+        // again and its events can no longer be misattributed to the new profile.
+        if let previous = activeSession {
+            logger.info(
+                "Switching active device: \(previous.profile.displayName, privacy: .public) -> \(profile.displayName, privacy: .public) (most recently connected wins)"
+            )
+            previous.bleLink.stopMonitoring()
+            previous.rfcommLink.handleClassicDisconnected()
+        }
+
         let session = ActiveDeviceSession(profile: profile, connectedAddress: address, addressConfirmed: addressConfirmed, state: headphoneState)
         activeSession = session
         session.bleLink.delegate = self
@@ -223,15 +237,14 @@ extension AppDelegate: ClassicConnectionMonitorDelegate {
 
         headphoneState.connection = .connected
         headphoneState.deviceName = profile.displayName
+        headphoneState.noiseModeEventMapVerified = profile.eventMapVerified
         headphoneState.lastUpdated = Date()
 
         session.bleLink.startMonitoring()
-        // RFCOMM is only ever opened for a profile that actually supports noise control — see
-        // DeviceProfile.supportsNoiseControl's own doc comment. The 670NC's channel 21 is
-        // SDP-confirmed present but deliberately never opened yet.
-        if profile.supportsNoiseControl {
-            session.rfcommLink.handleClassicConnected()
-        }
+        // RFCOMM is now opened for any matched profile, to listen for status — whether writes
+        // are ever attempted through it is RFCOMMRaceLink.allowsWrites's job (from
+        // DeviceProfile.allowsRFCOMMWrites), not a reason to withhold opening it at all.
+        session.rfcommLink.handleClassicConnected()
         panel?.handleClassicConnected()
     }
 
@@ -243,6 +256,7 @@ extension AppDelegate: ClassicConnectionMonitorDelegate {
         headphoneState.pendingNoiseMode = nil
         headphoneState.noiseModeConfirmationTimedOut = false
         headphoneState.noiseMode = .unknown
+        headphoneState.noiseModeEventMapVerified = true
         activeSession?.bleLink.stopMonitoring()
         activeSession?.rfcommLink.handleClassicDisconnected()
         activeSession = nil
