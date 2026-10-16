@@ -37,13 +37,6 @@ struct Tune770NCProfile: DeviceProfile {
         }
     }
 
-    // Derived from isModeVerified rather than hand-maintained separately from it, so there is no
-    // way for this list to drift out of sync with which modes are actually trusted. compactMap
-    // because a verified mode is still only allowlisted if it actually has a command frame —
-    // Off never will, but isModeVerified(.off) is already false, so this is belt-and-suspenders.
-    var writeAllowlist: [WriteAllowlistEntry] {
-        CommandableNoiseMode.allCases
-            .filter { isModeVerified($0) }
-            .compactMap { $0.commandFrame.map { WriteAllowlistEntry(payload: $0) } }
-    }
+    // writeAllowlist: no override needed — the protocol extension's default, derived from
+    // isModeVerified above, is exactly right.
 }

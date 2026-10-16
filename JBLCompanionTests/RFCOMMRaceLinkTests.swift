@@ -15,12 +15,19 @@ final class RFCOMMRaceLinkTests: XCTestCase {
     }
 
     func testAllowsWritesReflectsThe670NCProfile() {
+        // Hardware-verified (~/jbl-recon/rfcomm_send_test_670nc.swift): the 770NC's command frames
+        // work identically on the 670NC, confirmed by the user after each send.
         let link = RFCOMMRaceLink(profile: Tune670NCProfile(), classicAddress: "40:72:18:AB:EC:6A")
+        XCTAssertTrue(link.allowsWrites)
+    }
+
+    func testAllowsWritesIsFalseForAProfileWithNoVerifiedWrites() {
+        let link = RFCOMMRaceLink(profile: GenericProfile(), classicAddress: "00:00:00:00:00:00")
         XCTAssertFalse(link.allowsWrites)
     }
 
-    func testPerformRaceWriteRefusesForThe670NCRegardlessOfReadiness() {
-        let link = RFCOMMRaceLink(profile: Tune670NCProfile(), classicAddress: "40:72:18:AB:EC:6A")
+    func testPerformRaceWriteRefusesForAnUnwritableProfileRegardlessOfReadiness() {
+        let link = RFCOMMRaceLink(profile: GenericProfile(), classicAddress: "00:00:00:00:00:00")
         XCTAssertFalse(link.performRaceWrite(Data([0x05, 0x5A, 0x06, 0x00, 0x06, 0x0E, 0x00, 0x0A, 0x01, 0x00])))
     }
 }

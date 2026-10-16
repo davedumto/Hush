@@ -78,28 +78,38 @@ final class WriteGuardTests: XCTestCase {
         XCTAssertFalse(profile.isModeVerified(.off))
     }
 
-    // MARK: - Tune670NCProfile (battery/status only — no control writes yet)
+    // MARK: - Tune670NCProfile's real allowlist (hardware-verified directly on the 670NC,
+    // ~/jbl-recon/rfcomm_send_test_670nc.swift — identical command frames to the 770NC)
 
-    func testTune670NCProfileHasAnEmptyAllowlist() {
-        let profile = Tune670NCProfile()
-        XCTAssertTrue(profile.writeAllowlist.isEmpty)
-    }
-
-    func testWriteGuardRefusesEveryKnownCommandFrameForThe670NC() {
+    func testTune670NCAllowlistAcceptsTheThreeHardwareVerifiedCommands() {
         let profile = Tune670NCProfile()
         let guardInstance = WriteGuard(allowlist: profile.writeAllowlist)
 
-        for mode in CommandableNoiseMode.allCases {
-            guard let frame = mode.commandFrame else { continue }
-            XCTAssertFalse(guardInstance.isAllowed(payload: frame), "\(mode) must be refused — the 670NC has no verified writes")
+        for mode in [CommandableNoiseMode.ambientAware, .anc, .talkThru] {
+            XCTAssertTrue(guardInstance.isAllowed(payload: mode.commandFrame!), "\(mode) should be on the allowlist")
         }
     }
 
-    func testTune670NCProfileFlagsEveryModeAsUnverified() {
+    func testTune670NCAllowlistRejectsOffBecauseItHasNoCommandFrameAtAll() {
         let profile = Tune670NCProfile()
-        for mode in CommandableNoiseMode.allCases {
-            XCTAssertFalse(profile.isModeVerified(mode))
-        }
+        // Off is unverified AND frameless (like the 770NC, no Off command frame has ever been
+        // captured for this model either), so there's nothing that could even be on the allowlist
+        // for it — confirm that directly by checking the allowlist's actual entry count.
+        XCTAssertEqual(profile.writeAllowlist.count, 3)
+    }
+
+    func testTune670NCProfileFlagsAmbientANCAndTalkThruAsVerifiedButNotOff() {
+        let profile = Tune670NCProfile()
+        XCTAssertTrue(profile.isModeVerified(.ambientAware))
+        XCTAssertTrue(profile.isModeVerified(.anc))
+        XCTAssertTrue(profile.isModeVerified(.talkThru))
+        XCTAssertFalse(profile.isModeVerified(.off))
+    }
+
+    // MARK: - GenericProfile (no control writes at all — the true "nothing verified" baseline)
+
+    func testGenericProfileHasAnEmptyAllowlist() {
+        XCTAssertTrue(GenericProfile().writeAllowlist.isEmpty)
     }
 
     func testDefaultProtocolExtensionTreatsEveryModeAsUnverified() {

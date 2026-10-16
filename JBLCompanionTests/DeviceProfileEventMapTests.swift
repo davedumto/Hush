@@ -37,8 +37,11 @@ final class DeviceProfileEventMapTests: XCTestCase {
         }
     }
 
-    func testTune670NCProfileNeverAllowsRFCOMMWrites() {
-        XCTAssertFalse(Tune670NCProfile().allowsRFCOMMWrites)
+    func testTune670NCProfileAllowsRFCOMMWrites() {
+        // Hardware-verified: ~/jbl-recon/rfcomm_send_test_670nc.swift sent the 770NC's ANC,
+        // TalkThru, and Ambient Aware command frames directly to the 670NC and the user confirmed
+        // each one's real physical effect.
+        XCTAssertTrue(Tune670NCProfile().allowsRFCOMMWrites)
     }
 
     // MARK: - GenericProfile: safe placeholder defaults

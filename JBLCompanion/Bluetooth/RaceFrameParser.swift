@@ -85,10 +85,11 @@ enum RaceEventRecognizer {
 /// *command* bytes used to request a mode (NoiseControlCommander.commandFrame) are a separate,
 /// independently-verified question; see that file's own doc comment.
 ///
-/// A DeviceProfile whose own hardware hasn't been independently checked (e.g. Tune670NCProfile)
-/// can still delegate its own `noiseMode(forEventByte:)` to this shared map as a starting
-/// assumption, rather than duplicating the switch — `eventMapVerified` is what actually records
-/// whether that assumption has been confirmed for that model's own hardware.
+/// A DeviceProfile can delegate its own `noiseMode(forEventByte:)` to this shared map rather than
+/// duplicating the switch, whether or not its own hardware has been independently checked against
+/// it yet — `eventMapVerified` is what actually records whether that's been confirmed for that
+/// model's own hardware (both Tune770NCProfile and Tune670NCProfile currently delegate here, both
+/// independently verified).
 enum StandardRaceEventByteMap {
     static func noiseMode(forEventByte byte: UInt8) -> NoiseMode {
         switch byte {

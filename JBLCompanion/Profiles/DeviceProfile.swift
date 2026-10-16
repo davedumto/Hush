@@ -45,8 +45,8 @@ protocol DeviceProfile {
     /// Whether RFCOMMRaceLink is ever allowed to write a payload for this profile, enforced inside
     /// RFCOMMRaceLink itself (see `performRaceWrite`) — not just by an empty WriteGuard allowlist.
     /// False means every write attempt is refused in code, regardless of what WriteGuard would
-    /// otherwise allow; a profile with no verified command frames (like Tune670NCProfile) must
-    /// set this false so the channel can still be opened read-only to listen for status.
+    /// otherwise allow; a profile with no verified command frames (like GenericProfile) must set
+    /// this false so the channel can still be opened read-only to listen for status.
     var allowsRFCOMMWrites: Bool { get }
 
     /// Whether a 0% battery reading from this device's hardware is trustworthy as a real "empty"
@@ -60,8 +60,10 @@ protocol DeviceProfile {
     /// see RFCOMMRaceLink's own doc comment for why.
     var raceRFCOMMChannelID: BluetoothRFCOMMChannelID { get }
 
-    /// WriteGuard's allowlist for this device. Empty means every write is rejected. Expected to be
-    /// derived from `isModeVerified`, not hand-maintained separately from it.
+    /// WriteGuard's allowlist for this device. Empty means every write is rejected. Derived from
+    /// `isModeVerified` by the protocol extension's default below, not hand-maintained separately
+    /// from it — a conformer only needs its own override if its write grammar ever differs from
+    /// CommandableNoiseMode.commandFrame's shared one, which none currently do.
     var writeAllowlist: [WriteAllowlistEntry] { get }
 
     /// Maps a RACE noise-mode event's raw mode byte (RaceEvent.noiseMode's rawByte) to a
@@ -89,4 +91,13 @@ protocol DeviceProfile {
 extension DeviceProfile {
     func isModeVerified(_ mode: CommandableNoiseMode) -> Bool { false }
     var trustsZeroBatteryReading: Bool { true }
+
+    /// Every CommandableNoiseMode this profile marks verified, provided it actually has a command
+    /// frame (CommandableNoiseMode.commandFrame — Off never will). compactMap is
+    /// belt-and-suspenders: isModeVerified(.off) should already be false everywhere.
+    var writeAllowlist: [WriteAllowlistEntry] {
+        CommandableNoiseMode.allCases
+            .filter { isModeVerified($0) }
+            .compactMap { $0.commandFrame.map { WriteAllowlistEntry(payload: $0) } }
+    }
 }
