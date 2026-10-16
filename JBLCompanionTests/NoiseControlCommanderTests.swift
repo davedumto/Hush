@@ -26,12 +26,12 @@ final class FakeRaceWriteTransport: RaceWriteTransport {
     }
 }
 
-/// An allowlist permitting all three commandable modes, independent of Tune770NCProfile's current
-/// (and intentionally more restrictive) verified-mode allowlist — these tests are about transport
-/// readiness and rate-limiting, not about which modes happen to be verified right now; that's
-/// WriteGuardTests' job.
+/// An allowlist permitting every commandable mode that actually has a frame (Off doesn't and never
+/// will), independent of Tune770NCProfile's current verified-mode allowlist — these tests are
+/// about transport readiness and rate-limiting, not about which modes happen to be verified right
+/// now; that's WriteGuardTests' job.
 private func permissiveWriteGuard() -> WriteGuard {
-    WriteGuard(allowlist: CommandableNoiseMode.allCases.map { WriteAllowlistEntry(payload: $0.commandFrame) })
+    WriteGuard(allowlist: CommandableNoiseMode.allCases.compactMap { $0.commandFrame.map { WriteAllowlistEntry(payload: $0) } })
 }
 
 @MainActor
@@ -44,20 +44,29 @@ final class NoiseControlCommanderTests: XCTestCase {
         let transport = FakeRaceWriteTransport(ready: true)
         let commander = makeCommander(transport: transport)
         XCTAssertTrue(commander.setMode(.anc))
-        XCTAssertEqual(transport.writtenPayloads, [CommandableNoiseMode.anc.commandFrame])
+        XCTAssertEqual(transport.writtenPayloads, [CommandableNoiseMode.anc.commandFrame!])
     }
 
     func testRefusesToSendWhenLinkNotReady() {
         let transport = FakeRaceWriteTransport(ready: false)
         let commander = makeCommander(transport: transport)
-        XCTAssertFalse(commander.setMode(.off))
+        XCTAssertFalse(commander.setMode(.anc))
         XCTAssertTrue(transport.writtenPayloads.isEmpty)
     }
 
     func testRefusesToSendWhenNotAllowlisted() {
         let transport = FakeRaceWriteTransport(ready: true)
         let commander = NoiseControlCommander(writeGuard: WriteGuard(allowlist: []), transport: transport)
+        XCTAssertFalse(commander.setMode(.anc))
+    }
+
+    /// Off has no captured command frame at all — setMode must refuse it even when the transport
+    /// is fully ready and the write guard would allow anything, since there's nothing to send.
+    func testRefusesOffBecauseItHasNoCommandFrame() {
+        let transport = FakeRaceWriteTransport(ready: true)
+        let commander = makeCommander(transport: transport)
         XCTAssertFalse(commander.setMode(.off))
+        XCTAssertTrue(transport.writtenPayloads.isEmpty)
     }
 
     func testEnforcesMinimumIntervalBetweenWrites() {
@@ -65,7 +74,7 @@ final class NoiseControlCommanderTests: XCTestCase {
         var now = Date(timeIntervalSince1970: 0)
         let commander = makeCommander(transport: transport, now: { now })
 
-        XCTAssertTrue(commander.setMode(.off))
+        XCTAssertTrue(commander.setMode(.ambientAware))
         now = now.addingTimeInterval(0.1) // well under the 500ms minimum
         XCTAssertFalse(commander.setMode(.anc))
         XCTAssertEqual(transport.writtenPayloads.count, 1)
@@ -108,7 +117,7 @@ final class NoiseControlCommanderReadinessTransitionTests: XCTestCase {
         // Channel open — now both are true, and the command goes through.
         transport.isChannelOpen = true
         XCTAssertTrue(commander.setMode(.anc))
-        XCTAssertEqual(transport.writtenPayloads, [CommandableNoiseMode.anc.commandFrame])
+        XCTAssertEqual(transport.writtenPayloads, [CommandableNoiseMode.anc.commandFrame!])
     }
 
     /// A disconnect must revoke readiness, and readiness must come back once reconnect/reopen
@@ -119,7 +128,7 @@ final class NoiseControlCommanderReadinessTransitionTests: XCTestCase {
         var now = Date(timeIntervalSince1970: 0)
         let commander = makeCommander(transport: transport, now: { now })
 
-        XCTAssertTrue(commander.setMode(.off))
+        XCTAssertTrue(commander.setMode(.ambientAware))
 
         // Disconnect: a fresh reopen on reconnect would clear both sub-conditions.
         transport.isClassicConnected = false
@@ -132,7 +141,7 @@ final class NoiseControlCommanderReadinessTransitionTests: XCTestCase {
         transport.isChannelOpen = true
         now = now.addingTimeInterval(1)
         XCTAssertTrue(commander.setMode(.anc))
-        XCTAssertEqual(transport.writtenPayloads, [CommandableNoiseMode.off.commandFrame, CommandableNoiseMode.anc.commandFrame])
+        XCTAssertEqual(transport.writtenPayloads, [CommandableNoiseMode.ambientAware.commandFrame!, CommandableNoiseMode.anc.commandFrame!])
     }
 }
 

@@ -16,10 +16,10 @@ struct NotchView: View {
     let uiState: NotchUIState
     let collapsedSize: CGSize
     let onSelectNoiseMode: (CommandableNoiseMode) -> Void
-    /// Per-mode "is this command frame independently verified" check (Tune770NCProfile.
-    /// isModeVerified) — only verified modes' segments are tappable. See
-    /// NoiseControlCommander.commandFrame's doc comment for why this exists: the three captured
-    /// command frames' mode labels were never independently confirmed against live behavior.
+    /// Per-mode "is this command frame hardware-verified" check (Tune770NCProfile.isModeVerified)
+    /// — only verified modes' segments are tappable. Off has no command frame at all (none has
+    /// ever been captured), so its segment stays visible but permanently disabled rather than
+    /// disappearing — see NoiseControlCommander.commandFrame's doc comment.
     let isModeVerified: (CommandableNoiseMode) -> Bool
 
     /// JBL's own brand orange — used sparingly, as the one accent color against the black shape.
@@ -66,7 +66,6 @@ struct NotchView: View {
             header
             Divider().overlay(Color.white.opacity(0.1))
             noiseControlSection
-            talkThruRow
         }
         .padding(18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -151,6 +150,7 @@ struct NotchView: View {
         switch mode {
         case .off: return "Off"
         case .anc: return "ANC"
+        case .talkThru: return "TalkThru"
         case .ambientAware: return "Ambient"
         }
     }
@@ -179,26 +179,6 @@ struct NotchView: View {
             Text(state.noiseMode.displayText)
                 .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.5))
-        }
-    }
-
-    @ViewBuilder
-    private var talkThruRow: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "lock.fill")
-                .font(.system(size: 9))
-                .foregroundStyle(.white.opacity(0.3))
-            Text("TalkThru")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.white.opacity(0.45))
-            Spacer(minLength: 0)
-            Text("SOON")
-                .font(.system(size: 9, weight: .bold))
-                .tracking(0.5)
-                .foregroundStyle(.white.opacity(0.4))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Color.white.opacity(0.08), in: Capsule())
         }
     }
 }

@@ -30,43 +30,52 @@ final class WriteGuardTests: XCTestCase {
 
     // MARK: - Tune770NCProfile's real allowlist (derived from isModeVerified)
 
-    func testAllowlistAcceptsOnlyTheVerifiedAmbientCommand() {
+    func testAllowlistAcceptsTheThreeHardwareVerifiedCommands() {
         let profile = Tune770NCProfile()
         let guardInstance = WriteGuard(allowlist: profile.writeAllowlist)
 
-        XCTAssertTrue(guardInstance.isAllowed(payload: CommandableNoiseMode.ambientAware.commandFrame))
+        for mode in [CommandableNoiseMode.ambientAware, .anc, .talkThru] {
+            XCTAssertTrue(guardInstance.isAllowed(payload: mode.commandFrame!), "\(mode) should be on the allowlist")
+        }
     }
 
-    func testAllowlistRejectsTheUnverifiedOffAndANCCommands() {
+    func testAllowlistRejectsOffBecauseItHasNoCommandFrameAtAll() {
         let profile = Tune770NCProfile()
         let guardInstance = WriteGuard(allowlist: profile.writeAllowlist)
 
-        XCTAssertFalse(guardInstance.isAllowed(payload: CommandableNoiseMode.off.commandFrame))
-        XCTAssertFalse(guardInstance.isAllowed(payload: CommandableNoiseMode.anc.commandFrame))
+        XCTAssertNil(CommandableNoiseMode.off.commandFrame, "no Off frame has ever been captured")
+        // Off is unverified AND frameless, so there's nothing that could even be on the allowlist
+        // for it — confirm that directly by checking the allowlist's actual entry count.
+        XCTAssertEqual(profile.writeAllowlist.count, 3)
     }
 
-    func testAllowlistRejectsTheUnconfirmedTalkThruFrame() {
+    func testAllowlistRejectsTheOldUnconfirmedTalkThruHypothesisFrame() {
+        // This is a *different* byte sequence from CommandableNoiseMode.talkThru.commandFrame — it's
+        // the original, never-sent, never-confirmed 0B-family frame from the first iPad capture
+        // (protocol.md), long before the real TalkThru frame (the one previously mislabeled "ANC")
+        // was hardware-verified. That old hypothesis frame must stay rejected regardless.
         let profile = Tune770NCProfile()
         let guardInstance = WriteGuard(allowlist: profile.writeAllowlist)
-        let talkThruFrame = Data([0x05, 0x5A, 0x04, 0x00, 0x06, 0x0E, 0x00, 0x0B])
+        let oldUnconfirmedHypothesisFrame = Data([0x05, 0x5A, 0x04, 0x00, 0x06, 0x0E, 0x00, 0x0B])
 
-        XCTAssertFalse(guardInstance.isAllowed(payload: talkThruFrame))
+        XCTAssertFalse(guardInstance.isAllowed(payload: oldUnconfirmedHypothesisFrame))
     }
 
-    func testAllowlistRejectsASingleByteChangeToTheVerifiedCommand() {
+    func testAllowlistRejectsASingleByteChangeToAVerifiedCommand() {
         let profile = Tune770NCProfile()
         let guardInstance = WriteGuard(allowlist: profile.writeAllowlist)
-        var tampered = [UInt8](CommandableNoiseMode.ambientAware.commandFrame)
+        var tampered = [UInt8](CommandableNoiseMode.ambientAware.commandFrame!)
         tampered[tampered.count - 1] ^= 0x01 // flip the last byte
 
         XCTAssertFalse(guardInstance.isAllowed(payload: Data(tampered)))
     }
 
-    func testTune770NCProfileFlagsOnlyAmbientAsVerified() {
+    func testTune770NCProfileFlagsAmbientANCAndTalkThruAsVerifiedButNotOff() {
         let profile = Tune770NCProfile()
-        XCTAssertFalse(profile.isModeVerified(.off))
-        XCTAssertFalse(profile.isModeVerified(.anc))
         XCTAssertTrue(profile.isModeVerified(.ambientAware))
+        XCTAssertTrue(profile.isModeVerified(.anc))
+        XCTAssertTrue(profile.isModeVerified(.talkThru))
+        XCTAssertFalse(profile.isModeVerified(.off))
     }
 
     func testDefaultProtocolExtensionTreatsEveryModeAsUnverified() {

@@ -24,32 +24,35 @@ enum NoiseMode {
     }
 }
 
-/// The subset of NoiseMode that can actually be requested from the UI. TalkThru stays out of this
-/// set entirely: unlike Off/ANC/Ambient, there has never been a captured command frame for it, so
-/// there is nothing for a "verified" flag to even gate yet. `.unknown` obviously isn't a settable
-/// target either.
+/// The subset of NoiseMode that can actually be requested from the UI. `.unknown` obviously isn't
+/// a settable target. Off has no verified (or even captured) command frame at all, so it stays in
+/// this set purely so its segment can still be shown, disabled, rather than disappearing — see
+/// Tune770NCProfile.isModeVerified and NoiseControlCommander.commandFrame.
 enum CommandableNoiseMode: CaseIterable, Hashable {
     case off
     case anc
+    case talkThru
     case ambientAware
 
     var displayText: String {
         switch self {
         case .off: return "Off"
         case .anc: return "ANC"
+        case .talkThru: return "TalkThru"
         case .ambientAware: return "Ambient Aware"
         }
     }
 }
 
 extension NoiseMode {
-    /// nil for .talkThru/.unknown — there's no commandable equivalent to select for those.
+    /// nil only for .unknown — there's no commandable equivalent to select for that.
     var commandable: CommandableNoiseMode? {
         switch self {
         case .off: return .off
         case .anc: return .anc
+        case .talkThru: return .talkThru
         case .ambientAware: return .ambientAware
-        case .talkThru, .unknown: return nil
+        case .unknown: return nil
         }
     }
 }

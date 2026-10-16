@@ -17,19 +17,24 @@ struct Tune770NCProfile: DeviceProfile {
     // SDP-confirmed (~/jbl-recon/sdp_output_rfcomm_check.txt): the "Airoha_APP" service, channel 21.
     let raceRFCOMMChannelID: BluetoothRFCOMMChannelID = 21
 
-    // UNVERIFIED (see NoiseControlCommander.commandFrame's own doc comment): only Ambient Aware's
-    // command is independently confirmed to produce the mode it claims to. Off and ANC are not —
-    // flip these to true only after confirming each one by hand, e.g. via the Debug menu's
-    // "Send test frame…" item.
+    // Hardware-verified (see NoiseControlCommander.commandFrame's own doc comment): Ambient, ANC,
+    // and TalkThru are all independently confirmed, by sending each frame and checking both the
+    // resulting status event and the actual physical audio behavior. Off is not: no command frame
+    // has ever been captured for it, so there's nothing to verify or enable yet.
     func isModeVerified(_ mode: CommandableNoiseMode) -> Bool {
-        mode == .ambientAware
+        switch mode {
+        case .ambientAware, .anc, .talkThru: return true
+        case .off: return false
+        }
     }
 
     // Derived from isModeVerified rather than hand-maintained separately from it, so there is no
-    // way for this list to drift out of sync with which modes are actually trusted.
+    // way for this list to drift out of sync with which modes are actually trusted. compactMap
+    // because a verified mode is still only allowlisted if it actually has a command frame —
+    // Off never will, but isModeVerified(.off) is already false, so this is belt-and-suspenders.
     var writeAllowlist: [WriteAllowlistEntry] {
         CommandableNoiseMode.allCases
             .filter { isModeVerified($0) }
-            .map { WriteAllowlistEntry(payload: $0.commandFrame) }
+            .compactMap { $0.commandFrame.map { WriteAllowlistEntry(payload: $0) } }
     }
 }
