@@ -102,11 +102,17 @@ final class NotchPanel: NSPanel {
         container.addSubview(hosting)
         contentView = container
 
-        silhouette.setFloatingGap(initialGeometry.floatingGap)
         silhouette.onTap = { [weak self] in self?.handleTap() }
         silhouette.onHoverChange = { [weak self] hovering in self?.handleHover(hovering) }
 
         layoutContent(for: initialGeometry.collapsedSize, envelopeSize: initialGeometry.collapsedSize)
+        // Give the silhouette an initial path immediately — otherwise it stays empty (zero
+        // frame) until the first expand/collapse transition ever runs.
+        silhouette.resize(
+            to: initialGeometry.collapsedSize, from: initialGeometry.collapsedSize,
+            startGap: initialGeometry.floatingGap, targetGap: initialGeometry.floatingGap,
+            envelopeSize: initialGeometry.collapsedSize, reduceMotion: true, completion: {}
+        )
 
         installMonitors()
         syncScreenEdgeMonitors()
@@ -274,7 +280,6 @@ final class NotchPanel: NSPanel {
         let next = Self.baseGeometry(for: screen, measurements: menuBarMeasurements)
         guard next != geometry || currentSize != (uiState.isExpanded ? expandedSize(for: next) : next.collapsedSize) else { return }
         geometry = next
-        silhouette.setFloatingGap(geometry.floatingGap)
         syncScreenEdgeMonitors()
         present(expanded: uiState.isExpanded)
     }
@@ -355,8 +360,17 @@ final class NotchPanel: NSPanel {
         setFrame(geometry.frame(for: envelope), display: true)
         layoutContent(for: start, envelopeSize: envelope)
 
+        // The capsule's rounded-pill shape only ever belongs to the small collapsed indicator —
+        // the wide expanded card is always a plain rounded rectangle (gap nil), regardless of
+        // which silhouette is chosen for the collapsed state.
+        let startGap = expanded ? geometry.floatingGap : nil
+        let targetGap = expanded ? nil : geometry.floatingGap
+
         isAnimating = true
-        silhouette.resize(to: target, from: start, envelopeSize: envelope, reduceMotion: reduceMotion) { [weak self] in
+        silhouette.resize(
+            to: target, from: start, startGap: startGap, targetGap: targetGap,
+            envelopeSize: envelope, reduceMotion: reduceMotion
+        ) { [weak self] in
             guard let self else { return }
             self.isAnimating = false
             self.currentSize = target

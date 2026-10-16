@@ -9,7 +9,6 @@ final class NotchSilhouetteView: NSView {
     private static let motionKey = "islandResize"
 
     private let shapeLayer = CAShapeLayer()
-    private var floatingGap: CGFloat?
     private var animationGeneration = 0
     private var pressedInside = false
     private var hoverTrackingArea: NSTrackingArea?
@@ -26,10 +25,6 @@ final class NotchSilhouetteView: NSView {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) is not used")
-    }
-
-    func setFloatingGap(_ gap: CGFloat?) {
-        floatingGap = gap
     }
 
     override func updateTrackingAreas() {
@@ -72,9 +67,18 @@ final class NotchSilhouetteView: NSView {
     }
 
     /// Resizes the shape from `start` to `target` within a window already sized to
-    /// `envelopeSize` (the largest the shape gets mid-swing, including overshoot). Calls
-    /// `completion` once the resize has settled (or immediately, unanimated, under Reduce Motion).
-    func resize(to target: CGSize, from start: CGSize, envelopeSize: CGSize, reduceMotion: Bool, completion: @escaping () -> Void) {
+    /// `envelopeSize` (the largest the shape gets mid-swing, including overshoot). `startGap`/
+    /// `targetGap` are the floating-gap values (nil = attached/flush, the normal rounded-card
+    /// shape) at each end — e.g. the collapsed capsule's gap at one end and nil at the other,
+    /// since the capsule's pill shape only ever applies to the small resting indicator, never to
+    /// the wide expanded card. The gap is linearly interpolated between them across the resize,
+    /// so a capsule's rounded ends visually ease open as it grows into the card (and back as it
+    /// shrinks). Calls `completion` once the resize has settled (or immediately, unanimated,
+    /// under Reduce Motion).
+    func resize(
+        to target: CGSize, from start: CGSize, startGap: CGFloat?, targetGap: CGFloat?,
+        envelopeSize: CGSize, reduceMotion: Bool, completion: @escaping () -> Void
+    ) {
         animationGeneration += 1
         let generation = animationGeneration
 
@@ -84,8 +88,15 @@ final class NotchSilhouetteView: NSView {
         func origin(for size: CGSize) -> CGPoint {
             CGPoint(x: (envelopeSize.width - size.width) / 2, y: envelopeSize.height - size.height)
         }
-        func path(for size: CGSize) -> CGPath {
-            let raw = IslandShape.path(size: size, floatingGap: floatingGap)
+        func gap(at t: Double) -> CGFloat? {
+            let s = startGap ?? 0
+            let e = targetGap ?? 0
+            guard s != 0 || e != 0 else { return nil }
+            let interpolated = s + (e - s) * CGFloat(t)
+            return interpolated > 0.5 ? interpolated : nil
+        }
+        func path(for size: CGSize, at t: Double) -> CGPath {
+            let raw = IslandShape.path(size: size, floatingGap: gap(at: t))
             var transform = CGAffineTransform(translationX: origin(for: size).x, y: origin(for: size).y)
             return raw.copy(using: &transform) ?? raw
         }
@@ -93,14 +104,14 @@ final class NotchSilhouetteView: NSView {
         if reduceMotion {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            shapeLayer.path = path(for: target)
+            shapeLayer.path = path(for: target, at: 1)
             CATransaction.commit()
             completion()
             return
         }
 
         let (sizes, keyTimes, duration) = IslandMotion.frames(from: start, to: target)
-        let paths = sizes.map { path(for: $0) }
+        let paths = zip(sizes, keyTimes).map { path(for: $0, at: $1) }
 
         let animation = CAKeyframeAnimation(keyPath: "path")
         animation.values = paths
