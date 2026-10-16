@@ -40,20 +40,64 @@ final class WriteGuardTests: XCTestCase {
         )
     }
 
-    func testRaceWriteCharacteristicIsRejectedWithEmptyAllowlist() {
-        // Tune770NCProfile's allowlist is empty, so WriteGuard must reject this regardless of
-        // payload. Service UUID is Tune770NCProfile.raceServiceUUID; the characteristic UUID is
-        // the write-without-response characteristic found during the earlier BLE recon of this
-        // device's RACE service (see ~/jbl-recon/ble.swift output).
+    // MARK: - Tune770NCProfile's real allowlist (the three confirmed noise-mode commands)
+
+    private static let raceWriteCharacteristic = CBUUID(string: "43484152-2DAB-3241-6972-6F6861424C45")
+    private static let raceNotifyCharacteristic = CBUUID(string: "43484152-2DAB-3141-6972-6F6861424C45")
+
+    func testAllowlistAcceptsEachOfTheThreeConfirmedCommands() {
         let profile = Tune770NCProfile()
         let guardInstance = WriteGuard(allowlist: profile.writeAllowlist)
-        let raceWriteCharacteristic = CBUUID(string: "43484152-2DAB-3241-6972-6F6861424C45")
+        for mode in CommandableNoiseMode.allCases {
+            XCTAssertTrue(
+                guardInstance.isAllowed(
+                    serviceUUID: profile.raceServiceUUID!,
+                    characteristicUUID: Self.raceWriteCharacteristic,
+                    payload: mode.commandFrame
+                ),
+                "\(mode) should be on the allowlist"
+            )
+        }
+    }
+
+    func testAllowlistRejectsTheUnconfirmedTalkThruFrame() {
+        let profile = Tune770NCProfile()
+        let guardInstance = WriteGuard(allowlist: profile.writeAllowlist)
+        let talkThruFrame = Data([0x05, 0x5A, 0x04, 0x00, 0x06, 0x0E, 0x00, 0x0B])
 
         XCTAssertFalse(
             guardInstance.isAllowed(
                 serviceUUID: profile.raceServiceUUID!,
-                characteristicUUID: raceWriteCharacteristic,
-                payload: Data([0x05, 0x5A, 0x06, 0x00, 0x06, 0x0E, 0x00, 0x0A, 0x09, 0x04]) // ANC-on command
+                characteristicUUID: Self.raceWriteCharacteristic,
+                payload: talkThruFrame
+            )
+        )
+    }
+
+    func testAllowlistRejectsASingleByteChangeToAConfirmedCommand() {
+        let profile = Tune770NCProfile()
+        let guardInstance = WriteGuard(allowlist: profile.writeAllowlist)
+        var tampered = [UInt8](CommandableNoiseMode.anc.commandFrame)
+        tampered[tampered.count - 1] ^= 0x01 // flip the last byte
+
+        XCTAssertFalse(
+            guardInstance.isAllowed(
+                serviceUUID: profile.raceServiceUUID!,
+                characteristicUUID: Self.raceWriteCharacteristic,
+                payload: Data(tampered)
+            )
+        )
+    }
+
+    func testAllowlistRejectsTheRightBytesOnTheNotifyCharacteristic() {
+        let profile = Tune770NCProfile()
+        let guardInstance = WriteGuard(allowlist: profile.writeAllowlist)
+
+        XCTAssertFalse(
+            guardInstance.isAllowed(
+                serviceUUID: profile.raceServiceUUID!,
+                characteristicUUID: Self.raceNotifyCharacteristic, // right bytes, wrong characteristic
+                payload: CommandableNoiseMode.off.commandFrame
             )
         )
     }
