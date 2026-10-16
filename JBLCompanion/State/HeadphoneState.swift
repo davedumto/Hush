@@ -12,6 +12,16 @@ enum NoiseMode {
     case ambientAware
     case talkThru
     case unknown
+
+    var displayText: String {
+        switch self {
+        case .off: return "Off"
+        case .anc: return "ANC"
+        case .ambientAware: return "Ambient Aware"
+        case .talkThru: return "TalkThru"
+        case .unknown: return "—"
+        }
+    }
 }
 
 @Observable
