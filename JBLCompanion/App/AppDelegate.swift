@@ -44,13 +44,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Call after any IslandSettings change (size, silhouette, fits, outline, display) so the
     /// panel re-resolves its geometry and re-presents at the current size.
     ///
-    /// Deferred to the next run loop turn on purpose: this fires from inside a SwiftUI control's
-    /// own onChange (a Stepper's +/- tap, a Toggle, a Picker selection) while the Island settings
-    /// popover is open. settingsDidChange() synchronously resizes/repositions NotchPanel — a
-    /// different window — and doing that synchronously, inside the same event that's still being
-    /// handled by the popover's own control, is exactly the kind of thing that can make an
-    /// unrelated window's frame change read as "focus moved away" and dismiss a transient
-    /// .window-style MenuBarExtra popover. Letting the click finish first avoids that.
+    /// Deferred to the next run loop turn: this fires from inside a SwiftUI control's own
+    /// onChange (a Stepper's +/- tap, a Toggle, a Picker selection) in the Island Settings window,
+    /// while that control's own click is still being handled. Letting the click finish first
+    /// avoids resizing/repositioning a different window (NotchPanel) synchronously, mid-gesture.
     func notchSettingsDidChange() {
         DispatchQueue.main.async { [weak self] in
             self?.panel?.settingsDidChange()
