@@ -68,8 +68,11 @@ struct JBLCompanionApp: App {
         .background(Color(red: 0.07, green: 0.07, blue: 0.07))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
+            // strokeBorder (not stroke) draws entirely inside the shape's bounds — a plain
+            // .stroke() centers on the edge, so half the line falls outside the view and gets
+            // clipped by the window .window style creates for MenuBarExtra, which is invisible.
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(accent.opacity(0.55), lineWidth: 0.75)
+                .strokeBorder(accent.opacity(0.85), lineWidth: 1.5)
         )
     }
 
