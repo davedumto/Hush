@@ -21,8 +21,9 @@ protocol ClassicConnectionMonitorDelegate: AnyObject {
 /// started — notifications only fire on a *new* connect event, so a device that's been connected
 /// since before launch produces no notification at all. Whichever signal reports the connection
 /// first wins; `attach(to:match:)` is idempotent against the other one arriving late. If a second,
-/// different known device connects while one is already attached, `shouldSwitch` makes the newer
-/// one the active one — most recently connected wins.
+/// different *model* connects while one is already attached, `shouldSwitch` makes the newer one
+/// the active one — most recently connected wins; a redundant notification for the same model
+/// (possibly under a different address — see `shouldSwitch`'s own doc comment) is always a no-op.
 ///
 /// @MainActor so it can hold the MainActor-isolated poller directly. Confirmed by a real crash
 /// (EXC_BREAKPOINT in MainActor.assumeIsolated, 2026-10-16) that IOBluetoothUserNotification
@@ -38,6 +39,10 @@ final class ClassicConnectionMonitor: NSObject {
     private var connectNotification: IOBluetoothUserNotification?
     private var disconnectNotification: IOBluetoothUserNotification?
     private var connectedDevice: IOBluetoothDevice?
+    /// The displayName of whichever profile `connectedDevice` currently matched — see
+    /// `shouldSwitch`'s doc comment for why this, not the device's address, is what "switching"
+    /// keys on.
+    private var connectedProfileDisplayName: String?
     private var poller: ClassicConnectionPoller?
 
     weak var delegate: ClassicConnectionMonitorDelegate?
@@ -94,6 +99,7 @@ final class ClassicConnectionMonitor: NSObject {
         poller?.stop()
         poller = nil
         connectedDevice = nil
+        connectedProfileDisplayName = nil
     }
 
     @objc private nonisolated func handleConnectNotification(notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
@@ -106,27 +112,39 @@ final class ClassicConnectionMonitor: NSObject {
         }
     }
 
-    /// True whenever there's no device currently attached, or the newly-connected device's
-    /// address differs from the one we're currently attached to — i.e. whether this connect event
-    /// should switch our attention to it. A device reconnecting (or its notification simply
-    /// firing twice) while it's already the attached one is a no-op, not a "switch." If two
-    /// different known devices are both connected, the one that connects (or reconnects) most
-    /// recently always becomes the active one. Pure string comparison, testable without a real
-    /// IOBluetoothDevice.
-    nonisolated static func shouldSwitch(from currentAddress: String?, to newAddress: String) -> Bool {
-        guard let currentAddress else { return true }
-        return normalize(currentAddress) != normalize(newAddress)
+    /// True whenever there's no profile currently attached, or the newly-matched profile is a
+    /// genuinely different model than the one we're currently attached to — i.e. whether this
+    /// connect event should switch our attention to it. Deliberately keyed on the matched
+    /// *profile*, not the device's address: a real-world observation (2026-10-16, the 670NC) is
+    /// that connecting the BLE battery link to an already-classic-connected accessory can trigger
+    /// a second IOBluetoothDevice connect notification for the *same physical unit*, resolving to
+    /// the same profile by name, but carrying an unrelated/unconfirmed address (likely a
+    /// BLE-identity artifact surfaced through the classic notification path) — keying on address
+    /// treated that as "a second 670NC connected," tore down the working RFCOMM session, and tried
+    /// to reopen it against the bogus address, breaking everything. Keying on the profile instead
+    /// means a redundant notification for the same model is always a no-op, never a switch; a
+    /// genuinely different model (both headphones actually connected at once) still switches.
+    /// Pure string comparison, testable without a real IOBluetoothDevice.
+    nonisolated static func shouldSwitch(from currentProfileDisplayName: String?, to newProfileDisplayName: String) -> Bool {
+        guard let currentProfileDisplayName else { return true }
+        return currentProfileDisplayName != newProfileDisplayName
     }
 
     private func attach(to device: IOBluetoothDevice, match: DeviceProfileMatcher.Match) {
         let address = device.addressString ?? "unknown"
-        guard Self.shouldSwitch(from: connectedDevice?.addressString, to: address) else { return }
+        guard Self.shouldSwitch(from: connectedProfileDisplayName, to: match.profile.displayName) else {
+            logger.info(
+                "Ignoring redundant connect notification for \(match.profile.displayName, privacy: .public) (already the active device; this notification's address was \(address, privacy: .public))"
+            )
+            return
+        }
         if connectedDevice != nil {
             logger.info("A different classic device connected; switching the active device to \(match.profile.displayName, privacy: .public) (most recently connected wins)")
         }
         poller?.stop()
         disconnectNotification?.unregister()
         connectedDevice = device
+        connectedProfileDisplayName = match.profile.displayName
         disconnectNotification = device.register(
             forDisconnectNotification: self,
             selector: #selector(handleDisconnectNotification(notification:device:))
@@ -144,6 +162,7 @@ final class ClassicConnectionMonitor: NSObject {
             self.disconnectNotification?.unregister()
             self.disconnectNotification = nil
             self.connectedDevice = nil
+            self.connectedProfileDisplayName = nil
             self.delegate?.classicConnectionMonitorDidDisconnect(self)
         }
     }

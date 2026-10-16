@@ -19,19 +19,21 @@ final class ClassicConnectionMonitorTests: XCTestCase {
         XCTAssertNotEqual(ClassicConnectionMonitor.normalize("6C-47-60-A7-31-5B"), "00:A4:1C:AA:44:79")
     }
 
-    // MARK: - shouldSwitch (two-device selection: most recently connected wins)
+    // MARK: - shouldSwitch (two-device selection: most recently connected *model* wins)
 
-    func testShouldSwitchWhenNoDeviceIsCurrentlyAttached() {
-        XCTAssertTrue(ClassicConnectionMonitor.shouldSwitch(from: nil, to: "00-A4-1C-AA-44-79"))
+    func testShouldSwitchWhenNoProfileIsCurrentlyAttached() {
+        XCTAssertTrue(ClassicConnectionMonitor.shouldSwitch(from: nil, to: "JBL Tune 770NC"))
     }
 
-    func testShouldNotSwitchWhenTheSameDeviceReconnects() {
-        // Different casing/separator for the same address — must still count as "the same device."
-        XCTAssertFalse(ClassicConnectionMonitor.shouldSwitch(from: "00:A4:1C:AA:44:79", to: "00-a4-1c-aa-44-79"))
+    func testShouldNotSwitchWhenTheSameModelReconnects() {
+        // Keyed on the matched profile, not the address — a real observed case (the 670NC) is a
+        // second connect notification for the same physical unit under an unrelated address (a
+        // BLE-identity artifact), which must never be treated as a different device connecting.
+        XCTAssertFalse(ClassicConnectionMonitor.shouldSwitch(from: "JBL Tune 670NC", to: "JBL Tune 670NC"))
     }
 
-    func testShouldSwitchWhenADifferentDeviceConnects() {
+    func testShouldSwitchWhenADifferentModelConnects() {
         // The 770NC is currently attached; the 670NC connects — most recently connected wins.
-        XCTAssertTrue(ClassicConnectionMonitor.shouldSwitch(from: "00:A4:1C:AA:44:79", to: "40-72-18-ab-ec-6a"))
+        XCTAssertTrue(ClassicConnectionMonitor.shouldSwitch(from: "JBL Tune 770NC", to: "JBL Tune 670NC"))
     }
 }
