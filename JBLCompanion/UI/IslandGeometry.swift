@@ -153,7 +153,10 @@ struct IslandGeometry: Equatable {
         // different thing entirely — a small status-bar pill, not a wide simulated notch — so it
         // gets its own compact width proportional to its own (small) height instead.
         let simulatedNotchWidth = 180 * barHeight / 32
-        let capsulePillWidth = cameraHeight * 2.4
+        // Hard cap, independent of the formula above: whatever a floating capsule computes to,
+        // it can never end up more than 3x its own (small) height, or past 120pt outright. If
+        // this specific shape ever shows up oversized again, that's proof it isn't this formula.
+        let capsulePillWidth = min(cameraHeight * 2.4, cameraHeight * 3, 120)
         self.cameraWidth = min(
             isNotched ? max(0, rawCameraWidth + fit.width + room * 2)
                 : (gap == nil ? simulatedNotchWidth : capsulePillWidth + effectiveCapsuleFit.width),
