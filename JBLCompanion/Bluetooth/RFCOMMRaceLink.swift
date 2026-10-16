@@ -16,10 +16,13 @@ protocol RFCOMMRaceLinkDelegate: AnyObject {
 /// was live-verified to carry the exact same `05 5x ...` frame grammar (~/jbl-recon,
 /// rfcomm_probe.swift and friends).
 ///
-/// Runs entirely on the main actor, matching BLEBatteryLink's own reasoning: IOBluetooth delivers
-/// classic callbacks on whatever run loop is current when the request was made, which for an
-/// AppKit app's main thread is the main run loop, so there is no separate callback queue to race
-/// against like CoreBluetooth's used to have.
+/// Runs on the main actor, but — unlike BLEBatteryLink's CoreBluetooth callbacks, which Apple
+/// documents as landing on the main queue when `queue: nil` is passed — classic IOBluetooth has no
+/// such documented guarantee. A real crash (EXC_BREAKPOINT in MainActor.assumeIsolated,
+/// 2026-10-16, in ClassicConnectionMonitor's structurally identical callback) confirmed that
+/// assuming one by analogy was wrong: these callbacks can arrive on a background queue. The
+/// methods below are `nonisolated` and hop onto the main actor with Task instead of asserting
+/// they're already on it.
 @MainActor
 final class RFCOMMRaceLink: NSObject {
     private let logger = Logger(subsystem: "com.davidejere.JBLCompanion", category: "RFCOMMRaceLink")
@@ -139,39 +142,43 @@ final class RFCOMMRaceLink: NSObject {
 
 // IOBluetoothRFCOMMChannel's delegate parameter is typed `id`, not a named Swift protocol, so
 // these are plain @objc methods (matching the selectors IOBluetooth calls by name), not a formal
-// protocol conformance — but they still need `nonisolated` + `MainActor.assumeIsolated` for the
-// same reason as BLEBatteryLink's CoreBluetooth delegate methods: the compiler can't see that
-// these are only ever invoked on the main run loop, so a @MainActor-isolated method can't be
-// called from this unproven-isolation context without asserting it explicitly.
+// protocol conformance. They're `nonisolated` and hop onto the main actor with Task — see this
+// file's own doc comment for why MainActor.assumeIsolated is unsafe here.
 extension RFCOMMRaceLink {
     @objc nonisolated func rfcommChannelOpenComplete(_ rfcommChannel: IOBluetoothRFCOMMChannel!, status error: IOReturn) {
-        MainActor.assumeIsolated {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             guard error == kIOReturnSuccess else {
-                logger.error("RFCOMM channel open failed: \(Self.describeIOReturn(error), privacy: .public)")
-                retryCoordinator.handleOpenFailure()
+                self.logger.error("RFCOMM channel open failed: \(Self.describeIOReturn(error), privacy: .public)")
+                self.retryCoordinator.handleOpenFailure()
                 return
             }
-            channel = rfcommChannel
-            retryCoordinator.handleOpenSuccess()
-            logger.info("RFCOMM channel open. MTU=\(rfcommChannel.getMTU(), privacy: .public)")
+            self.channel = rfcommChannel
+            self.retryCoordinator.handleOpenSuccess()
+            self.logger.info("RFCOMM channel open. MTU=\(rfcommChannel.getMTU(), privacy: .public)")
         }
     }
 
     @objc nonisolated func rfcommChannelData(_ rfcommChannel: IOBluetoothRFCOMMChannel!, data dataPointer: UnsafeMutableRawPointer!, length dataLength: Int) {
-        MainActor.assumeIsolated {
-            handleIncoming(Data(bytes: dataPointer, count: dataLength))
+        // Copied synchronously, before the hop below — dataPointer is only valid for the duration
+        // of this callback, not for whenever the deferred Task eventually gets to run. Data's own
+        // initializer copies eagerly, so this is a real, owned copy, safe to carry across actors.
+        let chunk = Data(bytes: dataPointer, count: dataLength)
+        Task { @MainActor [weak self] in
+            self?.handleIncoming(chunk)
         }
     }
 
     @objc nonisolated func rfcommChannelClosed(_ rfcommChannel: IOBluetoothRFCOMMChannel!) {
-        MainActor.assumeIsolated {
-            logger.info("RFCOMM channel closed")
-            channel = nil
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.logger.info("RFCOMM channel closed")
+            self.channel = nil
             // Still classic-connected (if we are) — start a fresh open attempt right away. If
             // this closure was actually caused by handleClassicDisconnected, isClassicLinkUp is
             // already false by the time this runs, so it's a no-op (that path already nils
             // `channel` and cancels retryCoordinator itself).
-            if isClassicLinkUp { retryCoordinator.start() }
+            if self.isClassicLinkUp { self.retryCoordinator.start() }
         }
     }
 }

@@ -18,10 +18,12 @@ protocol ClassicConnectionMonitorDelegate: AnyObject {
 /// since before launch produces no notification at all. Whichever signal reports the connection
 /// first wins; `attach(to:)` is idempotent against the other one arriving late.
 ///
-/// @MainActor (not the plain NSObject + manual Task-hop this used before) so it can hold the
-/// MainActor-isolated poller directly — matching BLEBatteryLink/RFCOMMRaceLink's own reasoning:
-/// IOBluetoothUserNotification callbacks are delivered on the current run loop, which for an
-/// AppKit app's main thread is the main run loop.
+/// @MainActor so it can hold the MainActor-isolated poller directly. Confirmed by a real crash
+/// (EXC_BREAKPOINT in MainActor.assumeIsolated, 2026-10-16) that IOBluetoothUserNotification
+/// callbacks do NOT reliably arrive on the main thread — unlike CBCentralManager's queue: nil,
+/// which is an Apple-documented guarantee, classic IOBluetooth has no such contract, and
+/// assuming one by analogy was wrong. The callback methods below are `nonisolated` and hop onto
+/// the main actor with Task instead of asserting they're already on it.
 @MainActor
 final class ClassicConnectionMonitor: NSObject {
     private let logger = Logger(subsystem: "com.davidejere.JBLCompanion", category: "ClassicConnectionMonitor")
@@ -78,10 +80,11 @@ final class ClassicConnectionMonitor: NSObject {
     }
 
     @objc private nonisolated func handleConnectNotification(notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
-        MainActor.assumeIsolated {
-            guard Self.normalize(device.addressString ?? "") == targetAddress else { return }
-            logger.info("Classic device connected via notification")
-            attach(to: device)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard Self.normalize(device.addressString ?? "") == self.targetAddress else { return }
+            self.logger.info("Classic device connected via notification")
+            self.attach(to: device)
         }
     }
 
@@ -98,12 +101,13 @@ final class ClassicConnectionMonitor: NSObject {
     }
 
     @objc private nonisolated func handleDisconnectNotification(notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
-        MainActor.assumeIsolated {
-            logger.info("Classic device disconnected via notification")
-            disconnectNotification?.unregister()
-            disconnectNotification = nil
-            connectedDevice = nil
-            delegate?.classicConnectionMonitorDidDisconnect(self)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.logger.info("Classic device disconnected via notification")
+            self.disconnectNotification?.unregister()
+            self.disconnectNotification = nil
+            self.connectedDevice = nil
+            self.delegate?.classicConnectionMonitorDidDisconnect(self)
         }
     }
 
