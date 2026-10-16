@@ -23,6 +23,13 @@ final class NotchSilhouetteView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        // A stroke centers on its path, so stroking the fill's own path directly puts half the
+        // line outside the fill shape. Rather than hand-computing an inset path (fragile for
+        // rounded rects — getting the corner-radius reduction exactly right is easy to get
+        // slightly wrong, which is what caused the outline to visibly overshoot the fill), clip
+        // this view's layer to its own bounds and let that cut away whatever falls outside —
+        // the same effect, achieved by the compositor instead of by hand.
+        layer?.masksToBounds = true
         shapeLayer.fillColor = NSColor.black.cgColor
         layer?.addSublayer(shapeLayer)
 
@@ -54,16 +61,6 @@ final class NotchSilhouetteView: NSView {
         let local = convert(point, from: superview)
         guard let path = shapeLayer.path, path.contains(local) else { return nil }
         return self
-    }
-
-    /// A stroke centers on its path, so stroking the fill shape's own path directly would let
-    /// half the line extend past the view's bounds — invisible (clipped by the window) exactly
-    /// like the menu panel's border was before switching to strokeBorder. Building the edge from
-    /// a path inset by an extra half line-width keeps the entire stroke inside the fill shape,
-    /// so its outer edge lines up with the fill's boundary instead of overshooting it.
-    private func edgePath(size: CGSize, inset: CGFloat, cornerRadius: CGFloat) -> CGPath {
-        let extra = edgeLayer.lineWidth / 2
-        return IslandShape.path(size: size, inset: inset + extra, cornerRadius: max(0, cornerRadius - extra))
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -124,20 +121,20 @@ final class NotchSilhouetteView: NSView {
             var transform = CGAffineTransform(translationX: origin(for: size).x, y: origin(for: size).y)
             return raw.copy(using: &transform) ?? raw
         }
+        // The edge stroke uses this exact same path as the fill — the view's own masksToBounds
+        // (set in init) clips away whatever half of the stroke falls outside it, rather than
+        // this trying to pre-compute an inset path itself.
         func fillPath(for size: CGSize, at t: Double) -> CGPath {
             let (inset, radius) = insetAndRadius(for: size, at: t)
             return translated(IslandShape.path(size: size, inset: inset, cornerRadius: radius), for: size)
-        }
-        func outlinePath(for size: CGSize, at t: Double) -> CGPath {
-            let (inset, radius) = insetAndRadius(for: size, at: t)
-            return translated(edgePath(size: size, inset: inset, cornerRadius: radius), for: size)
         }
 
         if reduceMotion {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            shapeLayer.path = fillPath(for: target, at: 1)
-            edgeLayer.path = outlinePath(for: target, at: 1)
+            let path = fillPath(for: target, at: 1)
+            shapeLayer.path = path
+            edgeLayer.path = path
             CATransaction.commit()
             completion()
             return
@@ -145,7 +142,6 @@ final class NotchSilhouetteView: NSView {
 
         let (sizes, keyTimes, duration) = IslandMotion.frames(from: start, to: target)
         let fillPaths = zip(sizes, keyTimes).map { fillPath(for: $0, at: $1) }
-        let outlinePaths = zip(sizes, keyTimes).map { outlinePath(for: $0, at: $1) }
 
         let animation = CAKeyframeAnimation(keyPath: "path")
         animation.values = fillPaths
@@ -154,18 +150,15 @@ final class NotchSilhouetteView: NSView {
         animation.duration = duration
         animation.setValue(generation, forKey: "islandGeneration")
 
-        let edgeAnimation = CAKeyframeAnimation(keyPath: "path")
-        edgeAnimation.values = outlinePaths
-        edgeAnimation.keyTimes = animation.keyTimes
-        edgeAnimation.calculationMode = .linear
-        edgeAnimation.duration = duration
-
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         shapeLayer.path = fillPaths.last
         shapeLayer.add(animation, forKey: Self.motionKey)
-        edgeLayer.path = outlinePaths.last
-        edgeLayer.add(edgeAnimation, forKey: Self.motionKey)
+        edgeLayer.path = fillPaths.last
+        if let edgeAnimation = animation.copy() as? CAKeyframeAnimation {
+            edgeAnimation.delegate = nil
+            edgeLayer.add(edgeAnimation, forKey: Self.motionKey)
+        }
         CATransaction.commit()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
