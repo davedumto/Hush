@@ -1,0 +1,29 @@
+name: JBLCompanion
+options:
+  bundleIdPrefix: com.davidejere
+  deploymentTarget:
+    macOS: "14.0"
+targets:
+  JBLCompanion:
+    type: application
+    platform: macOS
+    sources:
+      - path: JBLCompanion
+        excludes:
+          - "**/.gitkeep"
+    info:
+      path: JBLCompanion/Info.plist
+      properties:
+        CFBundleDisplayName: JBL Companion
+        LSUIElement: true
+        NSBluetoothAlwaysUsageDescription: "JBL Companion connects to your headphones to show battery and control noise cancelling."
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.davidejere.JBLCompanion
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_HARDENED_RUNTIME: NO
+        ENABLE_APP_SANDBOX: NO
