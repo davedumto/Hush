@@ -110,9 +110,18 @@ final class NotchSilhouetteView: NSView {
         // 0 = flush card shape, 1 = full pill — interpolated continuously, not switched at a threshold.
         let startPillness: Double = startGap != nil ? 1 : 0
         let targetPillness: Double = targetGap != nil ? 1 : 0
+        // A stroke centers on its path: half of edgeLayer.lineWidth needs to fit *outside* the
+        // fill's own boundary without hitting the view's literal edge. vorssaint's real outline
+        // doesn't fight this — it reserves actual room for the outline in its geometry, so the
+        // fill is never flush with the window edge in the first place, even when "attached."
+        // Same idea here: the fill is never allowed to sit flush with 0 — there's always at
+        // least this much margin, regardless of floating-gap state, so the stroke always has
+        // somewhere to live.
+        let minimumEdgeMargin = edgeLayer.lineWidth / 2 + 0.5
         func insetAndRadius(for size: CGSize, at t: Double) -> (inset: CGFloat, radius: CGFloat) {
             let pillness = CGFloat(startPillness + (targetPillness - startPillness) * t)
-            let inset = (startGap ?? 0) + ((targetGap ?? 0) - (startGap ?? 0)) * CGFloat(t)
+            let rawInset = (startGap ?? 0) + ((targetGap ?? 0) - (startGap ?? 0)) * CGFloat(t)
+            let inset = max(rawInset, minimumEdgeMargin)
             let cardRadius = IslandShape.cardRadius(height: size.height)
             let pillRadius = IslandShape.pillRadius(height: size.height)
             return (inset, cardRadius + (pillRadius - cardRadius) * pillness)
@@ -121,9 +130,8 @@ final class NotchSilhouetteView: NSView {
             var transform = CGAffineTransform(translationX: origin(for: size).x, y: origin(for: size).y)
             return raw.copy(using: &transform) ?? raw
         }
-        // The edge stroke uses this exact same path as the fill — the view's own masksToBounds
-        // (set in init) clips away whatever half of the stroke falls outside it, rather than
-        // this trying to pre-compute an inset path itself.
+        // The edge stroke uses this exact same path as the fill — with the minimum margin above,
+        // the stroke always fits inside the view's own bounds without needing separate inset math.
         func fillPath(for size: CGSize, at t: Double) -> CGPath {
             let (inset, radius) = insetAndRadius(for: size, at: t)
             return translated(IslandShape.path(size: size, inset: inset, cornerRadius: radius), for: size)
