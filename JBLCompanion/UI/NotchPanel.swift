@@ -394,6 +394,16 @@ final class NotchPanel: NSPanel {
             // 2. Settle the window back down to exactly the target size.
             self.setFrame(self.geometry.frame(for: target), display: true)
             self.layoutContent(for: target, envelopeSize: target)
+            // Shrinking silhouette's frame above does NOT rescale/reposition its existing path —
+            // that path was computed relative to the larger envelope frame it had while
+            // animating, so left alone it now sits offset toward one corner of the new, smaller
+            // frame instead of filling it, pushing the shape (and its outline) past the edge on
+            // whichever sides that offset points toward. Snapping it again, unanimated, at the
+            // final size recomputes the path for the frame it actually has now.
+            self.silhouette.resize(
+                to: target, from: target, startGap: targetGap, targetGap: targetGap,
+                envelopeSize: target, reduceMotion: true, completion: {}
+            )
             self.revealContent()
         }
     }
