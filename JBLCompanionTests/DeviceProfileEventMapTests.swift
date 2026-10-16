@@ -24,13 +24,13 @@ final class DeviceProfileEventMapTests: XCTestCase {
         XCTAssertTrue(Tune770NCProfile().allowsRFCOMMWrites)
     }
 
-    // MARK: - 670NC: carried over from the 770NC, not independently verified
+    // MARK: - 670NC: hardware-verified on its own unit (physical button press, every mode)
 
-    func testTune670NCProfileEventMapIsNotVerified() {
-        XCTAssertFalse(Tune670NCProfile().eventMapVerified)
+    func testTune670NCProfileEventMapIsVerified() {
+        XCTAssertTrue(Tune670NCProfile().eventMapVerified)
     }
 
-    func testTune670NCProfileEventMapStartsFromTheSameValuesAsThe770NC() {
+    func testTune670NCProfileEventMapMatchesThe770NC() {
         let profile = Tune670NCProfile()
         for byte in allKnownBytes {
             XCTAssertEqual(profile.noiseMode(forEventByte: byte), StandardRaceEventByteMap.noiseMode(forEventByte: byte))

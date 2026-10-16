@@ -31,14 +31,12 @@ struct Tune670NCProfile: DeviceProfile {
     let raceRFCOMMChannelID: BluetoothRFCOMMChannelID = 21
     let writeAllowlist: [WriteAllowlistEntry] = []
 
-    // Read-only RFCOMM capture (~/jbl-recon/rfcomm_quick_capture_670nc.swift, runs 1-2) confirmed
-    // ANC (rawByte 0x01) and Ambient Aware (rawByte 0x0A) match the 770NC's event mapping exactly,
-    // while the headphones' own on-device mode was independently known from the user setting it
-    // by hand before each capture. Off (0x00) and TalkThru (0x09) were never captured — on the
-    // user's call, the full map is carried over from the 770NC's StandardRaceEventByteMap as a
-    // starting assumption rather than independently confirmed, hence eventMapVerified = false:
-    // the card shows an "(unverified)" suffix (NoiseModeStatusText) until that's closed out.
-    let eventMapVerified = false
+    // Hardware-verified on the 670NC itself (physical button press, each mode checked in turn):
+    // 0x00 Off, 0x01 ANC, 0x09 TalkThru, 0x0A Ambient Aware — identical to the 770NC's event
+    // mapping (StandardRaceEventByteMap), so this delegates to it rather than duplicating the
+    // switch. All four bytes are now independently confirmed for this model, hence
+    // eventMapVerified = true: no "(unverified)" suffix (NoiseModeStatusText).
+    let eventMapVerified = true
     func noiseMode(forEventByte byte: UInt8) -> NoiseMode {
         StandardRaceEventByteMap.noiseMode(forEventByte: byte)
     }
