@@ -74,7 +74,8 @@ final class NotchPanel: NSPanel {
         self.onSelectNoiseMode = onSelectNoiseMode
         self.isModeVerified = isModeVerified
 
-        let screen = Self.resolveScreen() ?? NSScreen.screens.first
+        let resolution = Self.resolveScreen()
+        let screen = resolution.screen
         let initialGeometry = Self.baseGeometry(for: screen, measurements: MenuBarMeasurements())
         self.geometry = initialGeometry
         self.currentSize = initialGeometry.collapsedSize
@@ -85,6 +86,9 @@ final class NotchPanel: NSPanel {
             backing: .buffered,
             defer: false
         )
+
+        Self.logDisplayResolution(resolution, logger: logger)
+        logger.info("NotchPanel created. frame=\(NSStringFromRect(self.frame), privacy: .public)")
 
         isOpaque = false
         backgroundColor = .clear
@@ -284,8 +288,12 @@ final class NotchPanel: NSPanel {
     }
 
     func reposition() {
-        let screen = Self.resolveScreen() ?? NSScreen.screens.first
-        guard let screen else { return }
+        let resolution = Self.resolveScreen()
+        Self.logDisplayResolution(resolution, logger: logger)
+        guard let screen = resolution.screen else {
+            logger.error("reposition(): no display available; keeping current geometry")
+            return
+        }
         menuBarMeasurements.retainDisplays(NSScreen.screens.map(\.notchDisplayID))
         let next = Self.baseGeometry(for: screen, measurements: menuBarMeasurements)
         guard next != geometry || currentSize != (uiState.isExpanded ? expandedSize(for: next) : next.collapsedSize) else { return }
@@ -294,12 +302,51 @@ final class NotchPanel: NSPanel {
         present(expanded: uiState.isExpanded)
     }
 
-    private static func resolveScreen() -> NSScreen? {
-        if let uuid = IslandSettings.chosenDisplayUUID,
-           let chosen = NSScreen.screens.first(where: { $0.stableDisplayUUIDString == uuid }) {
-            return chosen
+    /// Resets the saved display preference ("Automatic") and re-resolves. Exposed for the
+    /// AppKit status-item fallback's "Reset Position" item, so a user stuck with the island
+    /// placed on a disconnected/misconfigured display (or just wanting a clean slate) has a way
+    /// to recover without digging into Island Settings.
+    func resetToDefaultDisplay() {
+        logger.info("resetToDefaultDisplay(): clearing saved display preference")
+        IslandSettings.chosenDisplayUUID = nil
+        reposition()
+    }
+
+    private struct ScreenResolution {
+        let screen: NSScreen?
+        let didFallBack: Bool
+        let chosenUUID: String?
+    }
+
+    /// Picks the display to place the island on, via DisplayResolver's pure fallback logic (see
+    /// its own doc comment) rather than NSScreen-matching inline here, so the fallback decision
+    /// itself is unit-testable.
+    private static func resolveScreen() -> ScreenResolution {
+        let chosenUUID = IslandSettings.chosenDisplayUUID
+        let screens = NSScreen.screens
+        let candidates = screens.map { DisplayResolver.Candidate(uuid: $0.stableDisplayUUIDString, frame: $0.frame) }
+        switch DisplayResolver.resolve(chosenUUID: chosenUUID, candidates: candidates) {
+        case .chosen(let index):
+            return ScreenResolution(screen: screens[index], didFallBack: false, chosenUUID: chosenUUID)
+        case .fallback(let index):
+            let screen = index.map { screens[$0] }
+            return ScreenResolution(screen: screen, didFallBack: chosenUUID != nil, chosenUUID: chosenUUID)
         }
-        return NSScreen.screens.first
+    }
+
+    private static func logDisplayResolution(_ resolution: ScreenResolution, logger: Logger) {
+        if resolution.didFallBack, let chosenUUID = resolution.chosenUUID {
+            logger.info(
+                "Saved display \(chosenUUID, privacy: .public) not found among connected displays (or had an empty frame); falling back to the default display"
+            )
+        }
+        if let screen = resolution.screen {
+            logger.info(
+                "Island placed on display uuid=\(screen.stableDisplayUUIDString ?? "unknown", privacy: .public) frame=\(NSStringFromRect(screen.frame), privacy: .public)"
+            )
+        } else {
+            logger.error("No display available to place the island on")
+        }
     }
 
     private static func baseGeometry(for screen: NSScreen?, measurements: MenuBarMeasurements) -> IslandGeometry {

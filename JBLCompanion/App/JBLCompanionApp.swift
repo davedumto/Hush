@@ -1,15 +1,22 @@
 import SwiftUI
+import os.log
 
 @main
 struct JBLCompanionApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @AppStorage("showNotchCircle") private var showNotchCircle = true
+    private let logger = Logger(subsystem: "com.davidejere.JBLCompanion", category: "JBLCompanionApp")
 
     var body: some Scene {
         MenuBarExtra {
             menuContent
         } label: {
+            // SwiftUI gives MenuBarExtra no direct "the status item was created" hook, so this
+            // onAppear is the closest available confirmation that the scene actually rendered —
+            // if this log line is ever missing from a launch where the icon doesn't show, that
+            // points at MenuBarExtra itself failing to render rather than something downstream.
             Image(systemName: appDelegate.headphoneState.connection == .connected ? "headphones.circle.fill" : "headphones")
+                .onAppear { logger.info("MenuBarExtra label appeared (status item should be visible now)") }
         }
         // Back to the default .menu style — a plain native NSMenu, no custom background/border/
         // window-style wrapper.

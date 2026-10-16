@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var noiseControlCommander = NoiseControlCommander(writeGuard: writeGuard, transport: rfcommLink)
     private lazy var noiseModeCoordinator = NoiseModeRequestCoordinator(state: headphoneState, sender: noiseControlCommander)
     private var panel: NotchPanel?
+    private var fallbackStatusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // The unit test target hosts this app (required for @testable import to resolve symbols
@@ -23,6 +24,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             logger.info("Launched as XCTest host; skipping Bluetooth/UI startup")
             return
         }
+
+        // Created first, before anything else in this method that could fail — a plain AppKit
+        // NSStatusItem is about as close to guaranteed-to-work as menu bar UI gets, unlike
+        // SwiftUI's MenuBarExtra (JBLCompanionApp), so this exists specifically so the app is
+        // never completely inaccessible even if something downstream silently fails to show.
+        setupFallbackStatusItem()
 
         classicMonitor.delegate = self
         bleLink.delegate = self
@@ -39,6 +46,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         classicMonitor.start()
         logger.info("JBLCompanion launched; monitoring classic address \(self.profile.classicAddress, privacy: .public)")
+    }
+
+    // MARK: - AppKit status-item fallback (always present — see applicationDidFinishLaunching)
+
+    private func setupFallbackStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        item.button?.image = NSImage(systemSymbolName: "headphones", accessibilityDescription: "JBL Companion")
+
+        let menu = NSMenu()
+        menu.delegate = self
+
+        let showNotchItem = NSMenuItem(title: "Show Notch", action: #selector(toggleShowNotchFromFallback), keyEquivalent: "")
+        showNotchItem.target = self
+        menu.addItem(showNotchItem)
+
+        let resetPositionItem = NSMenuItem(title: "Reset Position", action: #selector(resetPositionFromFallback), keyEquivalent: "")
+        resetPositionItem.target = self
+        menu.addItem(resetPositionItem)
+
+        menu.addItem(.separator())
+
+        let copyDiagnosticsItem = NSMenuItem(title: "Copy Diagnostics", action: #selector(copyDiagnosticsFromFallback), keyEquivalent: "")
+        copyDiagnosticsItem.target = self
+        menu.addItem(copyDiagnosticsItem)
+
+        menu.addItem(.separator())
+
+        let quitItem = NSMenuItem(title: "Quit", action: #selector(quitFromFallback), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
+
+        item.menu = menu
+        fallbackStatusItem = item
+        logger.info("Fallback NSStatusItem created")
+    }
+
+    @objc private func toggleShowNotchFromFallback() {
+        let current = UserDefaults.standard.object(forKey: "showNotchCircle") as? Bool ?? true
+        let newValue = !current
+        UserDefaults.standard.set(newValue, forKey: "showNotchCircle")
+        setNotchVisible(newValue)
+    }
+
+    @objc private func resetPositionFromFallback() {
+        panel?.resetToDefaultDisplay()
+    }
+
+    @objc private func copyDiagnosticsFromFallback() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(diagnosticsText(), forType: .string)
+    }
+
+    @objc private func quitFromFallback() {
+        NSApplication.shared.terminate(nil)
     }
 
     func setNotchVisible(_ visible: Bool) {
@@ -138,6 +200,17 @@ extension AppDelegate: BLEBatteryLinkDelegate {
 
     func bleBatteryLinkDidDisconnect(_ link: BLEBatteryLink) {
         headphoneState.batteryPercent = nil
+    }
+}
+
+extension AppDelegate: NSMenuDelegate {
+    /// Refreshes the fallback menu's "Show Notch" checkmark right before it opens, rather than
+    /// trying to keep it in sync after every toggle — the SwiftUI MenuBarExtra's own Toggle can
+    /// also change the same UserDefaults key, and this way both surfaces always agree.
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu === fallbackStatusItem?.menu else { return }
+        let showing = UserDefaults.standard.object(forKey: "showNotchCircle") as? Bool ?? true
+        menu.item(withTitle: "Show Notch")?.state = showing ? .on : .off
     }
 }
 
