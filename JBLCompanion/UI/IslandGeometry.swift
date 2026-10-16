@@ -139,19 +139,27 @@ struct IslandGeometry: Equatable {
         let room: CGFloat = isNotched && outline ? 2 : 0
         outlineRoom = room
 
-        // Without a camera, simulate a cutout 180pt wide, scaled to the menu-bar height.
-        let simulatedWidth = 180 * barHeight / 32
-        self.cameraWidth = min(
-            isNotched ? max(0, rawCameraWidth + fit.width + room * 2) : simulatedWidth + effectiveCapsuleFit.width,
-            screen.width * 0.7
-        )
-
+        // Height first — the capsule's resting width (below) is sized relative to it, and it
+        // doesn't depend on width itself either way.
         if isNotched {
             let baseHeight = hideMenuBarGap ? max(safeAreaTop, barHeight) : safeAreaTop
             cameraHeight = min(max(0, baseHeight + fit.height + room), 64)
         } else {
             cameraHeight = max(barHeight + effectiveCapsuleFit.height, (gap ?? 0) * 2 + 12)
         }
+
+        // Without a camera, a *notch*-style resting shape simulates a cutout 180pt wide, scaled
+        // to the menu-bar height, so it reads as a real notch. A floating *capsule* is a
+        // different thing entirely — a small status-bar pill, not a wide simulated notch — so it
+        // gets its own compact width proportional to its own (small) height instead.
+        let simulatedNotchWidth = 180 * barHeight / 32
+        let capsulePillWidth = cameraHeight * 2.4
+        self.cameraWidth = min(
+            isNotched ? max(0, rawCameraWidth + fit.width + room * 2)
+                : (gap == nil ? simulatedNotchWidth : capsulePillWidth + effectiveCapsuleFit.width),
+            screen.width * 0.7
+        )
+
         menuBarHeight = max(cameraHeight, barHeight)
     }
 
