@@ -1,4 +1,5 @@
 import CoreBluetooth
+import IOBluetooth
 
 /// Placeholder fallback profile for an unrecognized/future device. Not wired into the app yet in
 /// Phase 1 (only Tune770NCProfile is actually instantiated) — this exists so DeviceProfile has more
@@ -13,9 +14,8 @@ struct GenericProfile: DeviceProfile {
     let batteryServiceUUID = CBUUID(string: "180F")
     let batteryLevelUUID = CBUUID(string: "2A19")
 
-    let raceServiceUUID: CBUUID? = nil
-
     let supportsNoiseControl = false
+    let raceRFCOMMChannelID: BluetoothRFCOMMChannelID = 0
 
     let writeAllowlist: [WriteAllowlistEntry] = []
 }

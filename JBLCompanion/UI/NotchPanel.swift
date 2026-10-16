@@ -39,6 +39,7 @@ final class NotchPanel: NSPanel {
     private let headphoneState: HeadphoneState
     private let uiState = NotchUIState()
     private let onSelectNoiseMode: (CommandableNoiseMode) -> Void
+    private let isModeVerified: (CommandableNoiseMode) -> Bool
 
     private let silhouette = NotchSilhouetteView(frame: .zero)
     private var hosting: NSHostingView<NotchView>!
@@ -65,9 +66,13 @@ final class NotchPanel: NSPanel {
     private let hoverCloseDelay: TimeInterval = 0.4
     private let expandedTopInset: CGFloat = 16
 
-    init(headphoneState: HeadphoneState, onSelectNoiseMode: @escaping (CommandableNoiseMode) -> Void) {
+    init(
+        headphoneState: HeadphoneState, onSelectNoiseMode: @escaping (CommandableNoiseMode) -> Void,
+        isModeVerified: @escaping (CommandableNoiseMode) -> Bool
+    ) {
         self.headphoneState = headphoneState
         self.onSelectNoiseMode = onSelectNoiseMode
+        self.isModeVerified = isModeVerified
 
         let screen = Self.resolveScreen() ?? NSScreen.screens.first
         let initialGeometry = Self.baseGeometry(for: screen, measurements: MenuBarMeasurements())
@@ -92,7 +97,7 @@ final class NotchPanel: NSPanel {
         hosting = NSHostingView(
             rootView: NotchView(
                 state: headphoneState, uiState: uiState, collapsedSize: initialGeometry.collapsedSize,
-                onSelectNoiseMode: onSelectNoiseMode
+                onSelectNoiseMode: onSelectNoiseMode, isModeVerified: isModeVerified
             )
         )
         // NSHostingView does not clip its own content to its frame by default — if the SwiftUI
@@ -337,7 +342,7 @@ final class NotchPanel: NSPanel {
         let probe = NSHostingView(
             rootView: NotchView(
                 state: headphoneState, uiState: probeState, collapsedSize: geometry.collapsedSize,
-                onSelectNoiseMode: { _ in }
+                onSelectNoiseMode: { _ in }, isModeVerified: isModeVerified
             )
         )
         probe.frame = CGRect(x: 0, y: 0, width: max(width, 1), height: 1)

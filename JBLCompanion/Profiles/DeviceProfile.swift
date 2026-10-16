@@ -1,20 +1,20 @@
 import CoreBluetooth
 import Foundation
+import IOBluetooth
 
-/// A single, fully-specified write that WriteGuard is allowed to let through:
-/// exact service, exact characteristic, exact byte frame. Nothing fuzzy.
+/// A single, fully-specified write that WriteGuard is allowed to let through: an exact byte
+/// frame. Nothing fuzzy.
 struct WriteAllowlistEntry: Equatable {
-    let serviceUUID: CBUUID
-    let characteristicUUID: CBUUID
     let payload: Data
 }
 
-/// Everything the app needs to know about one specific headphone model:
-/// how to find it over classic Bluetooth and BLE, and what it's allowed to be told.
+/// Everything the app needs to know about one specific headphone model: how to find it over
+/// classic Bluetooth and BLE, and what it's allowed to be told.
 protocol DeviceProfile {
     var displayName: String { get }
 
-    /// Classic (BR/EDR) Bluetooth address. The only thing ClassicConnectionMonitor matches on.
+    /// Classic (BR/EDR) Bluetooth address. The only thing ClassicConnectionMonitor matches on, and
+    /// what RFCOMMRaceLink looks the device up by.
     var classicAddress: String { get }
 
     /// The service UUID the device's separate BLE identity advertises; used as a passive scan filter only.
@@ -27,13 +27,24 @@ protocol DeviceProfile {
     var batteryServiceUUID: CBUUID { get }
     var batteryLevelUUID: CBUUID { get }
 
-    /// The vendor control ("RACE") service, if this device has one. Its notify/write-without-response
-    /// characteristics are discovered dynamically by properties, never hardcoded, so this is only
-    /// used as a discovery filter — nil means "this device has no such service, don't look for one."
-    var raceServiceUUID: CBUUID? { get }
-
     var supportsNoiseControl: Bool { get }
 
-    /// WriteGuard's allowlist for this device. Empty means every write is rejected.
+    /// The classic RFCOMM channel ID that carries the RACE control protocol (the device's
+    /// SDP-advertised "Airoha_APP" service). Noise-mode commands are sent here, not over BLE —
+    /// see RFCOMMRaceLink's own doc comment for why.
+    var raceRFCOMMChannelID: BluetoothRFCOMMChannelID { get }
+
+    /// WriteGuard's allowlist for this device. Empty means every write is rejected. Expected to be
+    /// derived from `isModeVerified`, not hand-maintained separately from it.
     var writeAllowlist: [WriteAllowlistEntry] { get }
+
+    /// Whether the command frame for `mode` is independently verified to actually produce that
+    /// mode on real hardware, as opposed to merely being captured from the official app with a
+    /// label that was never independently checked. Defaults to false for every mode (see the
+    /// protocol extension below) until a conformer explicitly marks one true.
+    func isModeVerified(_ mode: CommandableNoiseMode) -> Bool
+}
+
+extension DeviceProfile {
+    func isModeVerified(_ mode: CommandableNoiseMode) -> Bool { false }
 }

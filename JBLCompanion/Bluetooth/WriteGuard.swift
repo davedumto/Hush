@@ -1,11 +1,12 @@
-import CoreBluetooth
 import Foundation
 import os.log
 
-/// Allowlist-only gate for every characteristic write this app will ever make.
-/// Default is reject. A write only goes through if it matches an entry
-/// (service UUID, characteristic UUID, and exact byte frame) in the allowlist
-/// the device's profile supplies. An empty allowlist rejects everything.
+/// Allowlist-only gate for every byte sequence this app will ever write to the headphones.
+/// Default is reject. A write only goes through if it matches an entry (an exact byte frame) in
+/// the allowlist the device's profile supplies. An empty allowlist rejects everything.
+///
+/// There is only one write destination now (the Airoha_APP RFCOMM channel), so unlike the earlier
+/// BLE-era allowlist there's no service/characteristic to also match — just the frame itself.
 final class WriteGuard {
     private let logger = Logger(subsystem: "com.davidejere.JBLCompanion", category: "WriteGuard")
     private let allowlist: [WriteAllowlistEntry]
@@ -15,17 +16,11 @@ final class WriteGuard {
     }
 
     /// Call this before every write. Only ever returns true for an exact allowlist match.
-    func isAllowed(serviceUUID: CBUUID, characteristicUUID: CBUUID, payload: Data) -> Bool {
-        let candidate = WriteAllowlistEntry(
-            serviceUUID: serviceUUID,
-            characteristicUUID: characteristicUUID,
-            payload: payload
-        )
+    func isAllowed(payload: Data) -> Bool {
+        let candidate = WriteAllowlistEntry(payload: payload)
         let allowed = allowlist.contains(candidate)
         if !allowed {
-            logger.warning(
-                "Rejected write — service=\(serviceUUID.uuidString, privacy: .public) characteristic=\(characteristicUUID.uuidString, privacy: .public) payload=\(payload.jblHexString, privacy: .public)"
-            )
+            logger.warning("Rejected write — payload=\(payload.jblHexString, privacy: .public)")
         }
         return allowed
     }

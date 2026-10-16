@@ -1,4 +1,5 @@
 import CoreBluetooth
+import IOBluetooth
 
 /// Profile for the JBL Tune 770NC, derived from the Bluetooth recon in ~/jbl-recon.
 struct Tune770NCProfile: DeviceProfile {
@@ -11,21 +12,24 @@ struct Tune770NCProfile: DeviceProfile {
     let batteryServiceUUID = CBUUID(string: "180F")
     let batteryLevelUUID = CBUUID(string: "2A19")
 
-    // Same custom UUID as bleScanServiceUUID — it's both what the LE identity advertises and the
-    // vendor ("Airoha RACE") control service that owns the notify/write-without-response pair this
-    // phase listens on (ATT handles 0x0053/0x0055 per protocol.md).
-    let raceServiceUUID: CBUUID? = CBUUID(string: "5052494D-2DAB-0341-6972-6F6861424C45")
-
     let supportsNoiseControl = true
 
-    // Exactly the three confirmed noise-mode commands (protocol.md / iPad capture), each tied to
-    // the RACE service, the write-without-response characteristic, and its full byte frame.
-    // TalkThru's frame was never confirmed by a matching event and is deliberately not here.
-    let writeAllowlist: [WriteAllowlistEntry] = CommandableNoiseMode.allCases.map { mode in
-        WriteAllowlistEntry(
-            serviceUUID: CBUUID(string: "5052494D-2DAB-0341-6972-6F6861424C45"),
-            characteristicUUID: CBUUID(string: "43484152-2DAB-3241-6972-6F6861424C45"),
-            payload: mode.commandFrame
-        )
+    // SDP-confirmed (~/jbl-recon/sdp_output_rfcomm_check.txt): the "Airoha_APP" service, channel 21.
+    let raceRFCOMMChannelID: BluetoothRFCOMMChannelID = 21
+
+    // UNVERIFIED (see NoiseControlCommander.commandFrame's own doc comment): only Ambient Aware's
+    // command is independently confirmed to produce the mode it claims to. Off and ANC are not —
+    // flip these to true only after confirming each one by hand, e.g. via the Debug menu's
+    // "Send test frame…" item.
+    func isModeVerified(_ mode: CommandableNoiseMode) -> Bool {
+        mode == .ambientAware
+    }
+
+    // Derived from isModeVerified rather than hand-maintained separately from it, so there is no
+    // way for this list to drift out of sync with which modes are actually trusted.
+    var writeAllowlist: [WriteAllowlistEntry] {
+        CommandableNoiseMode.allCases
+            .filter { isModeVerified($0) }
+            .map { WriteAllowlistEntry(payload: $0.commandFrame) }
     }
 }

@@ -16,6 +16,11 @@ struct NotchView: View {
     let uiState: NotchUIState
     let collapsedSize: CGSize
     let onSelectNoiseMode: (CommandableNoiseMode) -> Void
+    /// Per-mode "is this command frame independently verified" check (Tune770NCProfile.
+    /// isModeVerified) — only verified modes' segments are tappable. See
+    /// NoiseControlCommander.commandFrame's doc comment for why this exists: the three captured
+    /// command frames' mode labels were never independently confirmed against live behavior.
+    let isModeVerified: (CommandableNoiseMode) -> Bool
 
     /// JBL's own brand orange — used sparingly, as the one accent color against the black shape.
     private let accent = Color(red: 1.0, green: 0.45, blue: 0.05)
@@ -106,31 +111,54 @@ struct NotchView: View {
                 .tracking(0.8)
                 .foregroundStyle(.white.opacity(0.4))
 
-            // Selection always reflects the externally-confirmed/pending state, never a locally
-            // stored "what the user just tapped" value — so a tap shows pending, not an
-            // optimistic jump to the tapped mode.
-            Picker("Noise control", selection: Binding<CommandableNoiseMode?>(
-                get: { state.pendingNoiseMode ?? state.noiseMode.commandable },
-                set: { newValue in
-                    if let newValue { onSelectNoiseMode(newValue) }
-                }
-            )) {
-                Text("Off").tag(Optional(CommandableNoiseMode.off))
-                Text("ANC").tag(Optional(CommandableNoiseMode.anc))
-                Text("Ambient").tag(Optional(CommandableNoiseMode.ambientAware))
-            }
-            .pickerStyle(.segmented)
-            .tint(accent)
-            .disabled(state.pendingNoiseMode != nil || state.raceLinkStatus == .needsPairing)
-
+            modeSegments
             statusCaption
+        }
+    }
+
+    /// A hand-built segmented control, not SwiftUI's native `.pickerStyle(.segmented)` — that
+    /// style can only enable/disable the whole control at once, and individual segments need to
+    /// be independently disabled here based on `isModeVerified`.
+    @ViewBuilder
+    private var modeSegments: some View {
+        let selected = state.pendingNoiseMode ?? state.noiseMode.commandable
+        HStack(spacing: 2) {
+            ForEach(CommandableNoiseMode.allCases, id: \.self) { mode in
+                let verified = isModeVerified(mode)
+                let isSelected = selected == mode
+                Button {
+                    onSelectNoiseMode(mode)
+                } label: {
+                    Text(segmentLabel(mode))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(isSelected ? Color.black : .white.opacity(verified ? 0.85 : 0.3))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 5)
+                        .background(
+                            isSelected ? accent : Color.white.opacity(0.001), // near-invisible but still hit-testable
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(state.pendingNoiseMode != nil || !verified)
+            }
+        }
+        .padding(3)
+        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    private func segmentLabel(_ mode: CommandableNoiseMode) -> String {
+        switch mode {
+        case .off: return "Off"
+        case .anc: return "ANC"
+        case .ambientAware: return "Ambient"
         }
     }
 
     @ViewBuilder
     private var statusCaption: some View {
-        switch (state.pendingNoiseMode, state.raceLinkStatus, state.noiseModeConfirmationTimedOut) {
-        case (.some(let pending), _, _):
+        switch (state.pendingNoiseMode, state.noiseModeConfirmationTimedOut) {
+        case (.some(let pending), _):
             HStack(spacing: 5) {
                 ProgressView()
                     .controlSize(.mini)
@@ -139,15 +167,7 @@ struct NotchView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(accent)
             }
-        case (nil, .needsPairing, _):
-            HStack(alignment: .top, spacing: 5) {
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 10))
-                Text(RaceLinkStatus.needsPairingMessage)
-                    .font(.system(size: 11))
-            }
-            .foregroundStyle(.orange)
-        case (nil, _, true):
+        case (nil, true):
             HStack(spacing: 5) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 10))
@@ -155,7 +175,7 @@ struct NotchView: View {
                     .font(.system(size: 11))
             }
             .foregroundStyle(.orange)
-        case (nil, _, false):
+        case (nil, false):
             Text(state.noiseMode.displayText)
                 .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.5))

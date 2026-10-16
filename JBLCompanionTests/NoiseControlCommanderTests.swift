@@ -1,26 +1,22 @@
-import CoreBluetooth
 import XCTest
 @testable import JBLCompanion
 
-/// Internal, not private — also reused by RaceSubscriptionCoordinatorTests, which mirrors a
-/// coordinator's `isSubscribed` into one of these to confirm NoiseControlCommander never writes
-/// while the RACE link needs pairing.
+/// Internal, not private — also reused by RaceStreamReassemblerTests/RFCOMM-adjacent tests if any
+/// need a transport fake.
 @MainActor
 final class FakeRaceWriteTransport: RaceWriteTransport {
-    /// Independently settable, matching BLEBatteryLink's own three sub-conditions, so tests can
-    /// drive connect/subscribe/write-char-discovered/disconnect/reconnect transitions one at a
-    /// time instead of only flipping a single combined "ready" bool.
-    var isPeripheralConnected: Bool
-    var isRaceNotifySubscribed: Bool
-    var raceWriteCharacteristicUUID: CBUUID?
+    /// Independently settable, matching RFCOMMRaceLink's own two sub-conditions, so tests can
+    /// drive connect/open/close/disconnect/reconnect transitions one at a time instead of only
+    /// flipping a single combined "ready" bool.
+    var isClassicConnected: Bool
+    var isChannelOpen: Bool
     private(set) var writtenPayloads: [Data] = []
 
-    var isReadyForRaceWrites: Bool { isPeripheralConnected && isRaceNotifySubscribed }
+    var isReadyForRaceWrites: Bool { isClassicConnected && isChannelOpen }
 
-    init(ready: Bool = true, characteristicUUID: CBUUID? = CBUUID(string: "43484152-2DAB-3241-6972-6F6861424C45")) {
-        isPeripheralConnected = ready
-        isRaceNotifySubscribed = ready
-        raceWriteCharacteristicUUID = characteristicUUID
+    init(ready: Bool = true) {
+        isClassicConnected = ready
+        isChannelOpen = ready
     }
 
     func performRaceWrite(_ payload: Data) -> Bool {
@@ -30,12 +26,18 @@ final class FakeRaceWriteTransport: RaceWriteTransport {
     }
 }
 
+/// An allowlist permitting all three commandable modes, independent of Tune770NCProfile's current
+/// (and intentionally more restrictive) verified-mode allowlist — these tests are about transport
+/// readiness and rate-limiting, not about which modes happen to be verified right now; that's
+/// WriteGuardTests' job.
+private func permissiveWriteGuard() -> WriteGuard {
+    WriteGuard(allowlist: CommandableNoiseMode.allCases.map { WriteAllowlistEntry(payload: $0.commandFrame) })
+}
+
 @MainActor
 final class NoiseControlCommanderTests: XCTestCase {
     private func makeCommander(transport: FakeRaceWriteTransport, now: @escaping () -> Date = Date.init) -> NoiseControlCommander {
-        let profile = Tune770NCProfile()
-        let writeGuard = WriteGuard(allowlist: profile.writeAllowlist)
-        return NoiseControlCommander(profile: profile, writeGuard: writeGuard, transport: transport, now: now)
+        NoiseControlCommander(writeGuard: permissiveWriteGuard(), transport: transport, now: now)
     }
 
     func testSendsWhenReady() {
@@ -52,9 +54,9 @@ final class NoiseControlCommanderTests: XCTestCase {
         XCTAssertTrue(transport.writtenPayloads.isEmpty)
     }
 
-    func testRefusesToSendWhenNoWriteCharacteristicDiscoveredYet() {
-        let transport = FakeRaceWriteTransport(ready: true, characteristicUUID: nil)
-        let commander = makeCommander(transport: transport)
+    func testRefusesToSendWhenNotAllowlisted() {
+        let transport = FakeRaceWriteTransport(ready: true)
+        let commander = NoiseControlCommander(writeGuard: WriteGuard(allowlist: []), transport: transport)
         XCTAssertFalse(commander.setMode(.off))
     }
 
@@ -82,42 +84,34 @@ final class NoiseControlCommanderTests: XCTestCase {
     }
 }
 
-// MARK: - Readiness state transitions (connect, subscribe, write char discovered, disconnect, reconnect)
+// MARK: - Readiness state transitions (connect, channel open, close, disconnect, reconnect)
 
 @MainActor
 final class NoiseControlCommanderReadinessTransitionTests: XCTestCase {
     private func makeCommander(transport: FakeRaceWriteTransport, now: @escaping () -> Date = Date.init) -> NoiseControlCommander {
-        let profile = Tune770NCProfile()
-        let writeGuard = WriteGuard(allowlist: profile.writeAllowlist)
-        return NoiseControlCommander(profile: profile, writeGuard: writeGuard, transport: transport, now: now)
+        NoiseControlCommander(writeGuard: permissiveWriteGuard(), transport: transport, now: now)
     }
 
-    /// All three sub-conditions (peripheral connected, RACE notify subscription confirmed, write
-    /// characteristic discovered) must be true before a command can go out — refused if any one
-    /// of them isn't, not just when none are.
-    func testRefusesUntilAllThreeSubConditionsAreTrue() {
-        let transport = FakeRaceWriteTransport(ready: false, characteristicUUID: nil)
+    /// Both sub-conditions (classic connected, RFCOMM channel open) must be true before a command
+    /// can go out — refused if either one isn't, not just when neither are.
+    func testRefusesUntilBothSubConditionsAreTrue() {
+        let transport = FakeRaceWriteTransport(ready: false)
         let commander = makeCommander(transport: transport)
 
         // Disconnected: nothing is true yet.
         XCTAssertFalse(commander.setMode(.anc))
 
-        // "Connect": the peripheral is connected, but RACE service discovery/subscription hasn't
-        // happened yet.
-        transport.isPeripheralConnected = true
+        // Classic connected, but the RFCOMM channel hasn't opened yet.
+        transport.isClassicConnected = true
         XCTAssertFalse(commander.setMode(.anc))
 
-        // Write characteristic discovered, but the notify subscription isn't confirmed yet.
-        transport.raceWriteCharacteristicUUID = CBUUID(string: "43484152-2DAB-3241-6972-6F6861424C45")
-        XCTAssertFalse(commander.setMode(.anc))
-
-        // Notify subscription confirmed — now all three are true, and the command goes through.
-        transport.isRaceNotifySubscribed = true
+        // Channel open — now both are true, and the command goes through.
+        transport.isChannelOpen = true
         XCTAssertTrue(commander.setMode(.anc))
         XCTAssertEqual(transport.writtenPayloads, [CommandableNoiseMode.anc.commandFrame])
     }
 
-    /// A disconnect must revoke readiness, and readiness must come back once reconnect/rediscovery
+    /// A disconnect must revoke readiness, and readiness must come back once reconnect/reopen
     /// finishes — a stale "still ready" or a permanently-stuck "never ready again" would both be
     /// bugs the commander should never paper over.
     func testDisconnectRevokesReadinessUntilReconnectRestoresIt() {
@@ -127,17 +121,15 @@ final class NoiseControlCommanderReadinessTransitionTests: XCTestCase {
 
         XCTAssertTrue(commander.setMode(.off))
 
-        // Disconnect: a fresh RACE discovery on reconnect would clear all three sub-conditions.
-        transport.isPeripheralConnected = false
-        transport.isRaceNotifySubscribed = false
-        transport.raceWriteCharacteristicUUID = nil
+        // Disconnect: a fresh reopen on reconnect would clear both sub-conditions.
+        transport.isClassicConnected = false
+        transport.isChannelOpen = false
         now = now.addingTimeInterval(1) // past the 500ms rate limit, so this isn't what refuses it
         XCTAssertFalse(commander.setMode(.anc))
 
-        // Reconnect: everything is rediscovered and reconfirmed.
-        transport.isPeripheralConnected = true
-        transport.isRaceNotifySubscribed = true
-        transport.raceWriteCharacteristicUUID = CBUUID(string: "43484152-2DAB-3241-6972-6F6861424C45")
+        // Reconnect: classic link back up and the channel reopened.
+        transport.isClassicConnected = true
+        transport.isChannelOpen = true
         now = now.addingTimeInterval(1)
         XCTAssertTrue(commander.setMode(.anc))
         XCTAssertEqual(transport.writtenPayloads, [CommandableNoiseMode.off.commandFrame, CommandableNoiseMode.anc.commandFrame])
