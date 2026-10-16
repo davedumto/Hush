@@ -5,12 +5,15 @@ import os.log
 @MainActor
 protocol BLEBatteryLinkDelegate: AnyObject {
     func bleBatteryLink(_ link: BLEBatteryLink, didUpdateBatteryPercent percent: Int)
+    func bleBatteryLink(_ link: BLEBatteryLink, didUpdateNoiseMode mode: NoiseMode)
     func bleBatteryLinkDidDisconnect(_ link: BLEBatteryLink)
 }
 
 /// Finds the headphone's separate BLE identity (by advertised service UUID + exact local name —
-/// never by address, which rotates) once the classic side is connected, and reads/subscribes to
-/// Battery Level only. Discovers nothing beyond 0x180F/0x180A. Performs no writes.
+/// never by address, which rotates) once the classic side is connected. Discovers Battery Service,
+/// Device Information, and — if the profile has one — the RACE control service, and nothing else.
+/// In the RACE service it only ever subscribes to notifications (never reads, never writes);
+/// everything it learns about noise mode comes from passively parsing those notifications.
 final class BLEBatteryLink: NSObject {
     private let logger = Logger(subsystem: "com.davidejere.JBLCompanion", category: "BLEBatteryLink")
     private let profile: DeviceProfile
@@ -21,6 +24,7 @@ final class BLEBatteryLink: NSObject {
     private var peripheral: CBPeripheral?
     private var scanTimeoutWorkItem: DispatchWorkItem?
     private var wantsToScan = false
+    private var raceNotifyCharacteristicUUID: CBUUID?
 
     weak var delegate: BLEBatteryLinkDelegate?
 
@@ -47,6 +51,7 @@ final class BLEBatteryLink: NSObject {
             central.cancelPeripheralConnection(peripheral)
         }
         peripheral = nil
+        raceNotifyCharacteristicUUID = nil
     }
 
     private func beginScanIfReady() {
@@ -96,19 +101,27 @@ extension BLEBatteryLink: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        logger.info("BLE connected; discovering 180F/180A only")
         peripheral.delegate = self
-        peripheral.discoverServices([profile.batteryServiceUUID, CBUUID(string: "180A")])
+        var serviceUUIDs = [profile.batteryServiceUUID, CBUUID(string: "180A")]
+        let hasRaceService = profile.raceServiceUUID != nil
+        if let raceServiceUUID = profile.raceServiceUUID {
+            serviceUUIDs.append(raceServiceUUID)
+        }
+        let discoveredList = hasRaceService ? "180F/180A/RACE" : "180F/180A"
+        logger.info("BLE connected; discovering \(discoveredList, privacy: .public) only")
+        peripheral.discoverServices(serviceUUIDs)
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         logger.error("BLE connect failed: \(error?.localizedDescription ?? "unknown", privacy: .public)")
         self.peripheral = nil
+        raceNotifyCharacteristicUUID = nil
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         logger.info("BLE peripheral disconnected")
         self.peripheral = nil
+        raceNotifyCharacteristicUUID = nil
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.delegate?.bleBatteryLinkDidDisconnect(self)
@@ -122,30 +135,104 @@ extension BLEBatteryLink: CBPeripheralDelegate {
             logger.error("Service discovery failed: \(error!.localizedDescription, privacy: .public)")
             return
         }
-        for service in peripheral.services ?? [] where service.uuid == profile.batteryServiceUUID {
-            peripheral.discoverCharacteristics([profile.batteryLevelUUID], for: service)
+        for service in peripheral.services ?? [] {
+            if service.uuid == profile.batteryServiceUUID {
+                peripheral.discoverCharacteristics([profile.batteryLevelUUID], for: service)
+            } else if let raceServiceUUID = profile.raceServiceUUID, service.uuid == raceServiceUUID {
+                // Unlike battery, we don't know the RACE characteristic UUIDs ahead of time —
+                // they're picked by properties below, so discover all of them.
+                peripheral.discoverCharacteristics(nil, for: service)
+            }
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        guard error == nil, service.uuid == profile.batteryServiceUUID else { return }
-        for characteristic in service.characteristics ?? [] where characteristic.uuid == profile.batteryLevelUUID {
-            peripheral.readValue(for: characteristic)
-            peripheral.setNotifyValue(true, for: characteristic)
+        guard error == nil else {
+            logger.error("Characteristic discovery failed for \(service.uuid.uuidString, privacy: .public): \(error!.localizedDescription, privacy: .public)")
+            return
+        }
+
+        if service.uuid == profile.batteryServiceUUID {
+            for characteristic in service.characteristics ?? [] where characteristic.uuid == profile.batteryLevelUUID {
+                peripheral.readValue(for: characteristic)
+                peripheral.setNotifyValue(true, for: characteristic)
+            }
+        } else if let raceServiceUUID = profile.raceServiceUUID, service.uuid == raceServiceUUID {
+            handleRaceCharacteristics(service.characteristics ?? [], on: peripheral)
         }
     }
 
-    func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard error == nil,
-              characteristic.uuid == profile.batteryLevelUUID,
-              let data = characteristic.value,
-              let byte = data.first else { return }
+    /// Picks the notify and write-without-response characteristics by properties, never by
+    /// assumed UUID. If there isn't exactly one of each, logs everything found and stops —
+    /// no guessing, no subscribing, no writing.
+    private func handleRaceCharacteristics(_ characteristics: [CBCharacteristic], on peripheral: CBPeripheral) {
+        for characteristic in characteristics {
+            logger.info("RACE characteristic \(characteristic.uuid.uuidString, privacy: .public) properties=\(Self.describe(characteristic.properties), privacy: .public)")
+        }
 
+        let notifyCandidates = characteristics.filter { $0.properties.contains(.notify) }
+        let writeCandidates = characteristics.filter { $0.properties.contains(.writeWithoutResponse) }
+
+        guard notifyCandidates.count == 1, writeCandidates.count == 1 else {
+            logger.error(
+                "RACE service has \(notifyCandidates.count, privacy: .public) notify and \(writeCandidates.count, privacy: .public) write-without-response characteristics — expected exactly one of each. Stopping RACE setup rather than guessing."
+            )
+            return
+        }
+
+        let notifyCharacteristic = notifyCandidates[0]
+        raceNotifyCharacteristicUUID = notifyCharacteristic.uuid
+        logger.info("Subscribing to RACE notify characteristic \(notifyCharacteristic.uuid.uuidString, privacy: .public)")
+        peripheral.setNotifyValue(true, for: notifyCharacteristic)
+        // The write-without-response characteristic (writeCandidates[0]) is intentionally never
+        // used in Phase 2a — WriteGuard's allowlist is empty, and nothing in this phase writes.
+    }
+
+    private static func describe(_ properties: CBCharacteristicProperties) -> String {
+        var parts: [String] = []
+        if properties.contains(.read) { parts.append("read") }
+        if properties.contains(.write) { parts.append("write") }
+        if properties.contains(.writeWithoutResponse) { parts.append("writeWithoutResponse") }
+        if properties.contains(.notify) { parts.append("notify") }
+        if properties.contains(.indicate) { parts.append("indicate") }
+        return parts.isEmpty ? "none" : parts.joined(separator: ",")
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        guard error == nil, let data = characteristic.value else { return }
+
+        if characteristic.uuid == profile.batteryLevelUUID {
+            handleBatteryUpdate(data)
+        } else if characteristic.uuid == raceNotifyCharacteristicUUID {
+            handleRaceNotification(data)
+        }
+    }
+
+    private func handleBatteryUpdate(_ data: Data) {
+        guard let byte = data.first else { return }
         let percent = Int(byte)
         logger.info("Battery level: \(percent, privacy: .public)%")
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.delegate?.bleBatteryLink(self, didUpdateBatteryPercent: percent)
+        }
+    }
+
+    private func handleRaceNotification(_ data: Data) {
+        let frames = RaceFrameParser.parseFrames(from: data)
+        for frame in frames {
+            guard let event = RaceEventRecognizer.recognize(frame) else {
+                logger.debug("Unrecognized RACE frame type=\(frame.type.rawValue, privacy: .public) id=\(frame.id, privacy: .public) payload=\(frame.payload.jblHexString, privacy: .public)")
+                continue
+            }
+            switch event {
+            case .noiseMode(let mode):
+                logger.info("Noise mode event: \(String(describing: mode), privacy: .public)")
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.delegate?.bleBatteryLink(self, didUpdateNoiseMode: mode)
+                }
+            }
         }
     }
 }
