@@ -1,0 +1,91 @@
+import Foundation
+
+/// The four frame types seen on the RACE control channel (protocol.md §2).
+enum RaceFrameType: UInt8 {
+    case command = 0x5A
+    case response = 0x5B
+    case event = 0x5C
+    case status = 0x5D
+}
+
+/// One decoded RACE frame: `05 <type> <len16 LE> <id16 LE> <payload>`.
+/// `id` is the first two bytes after the length field; `payload` is whatever's left.
+struct RaceFrame: Equatable {
+    let type: RaceFrameType
+    let id: UInt16
+    let payload: Data
+}
+
+/// Pure parsing, no I/O. A single BLE notification can carry more than one frame back-to-back
+/// (protocol.md §2), so this walks the buffer and returns every complete frame it finds, silently
+/// stopping at the first truncated or malformed frame rather than throwing — a corrupt tail should
+/// never take down parsing of the frames that came before it.
+enum RaceFrameParser {
+    /// Minimum bytes for a frame with zero-length payload: sync(1) + type(1) + len16(2) + id16(2).
+    private static let minimumFrameBytes = 6
+
+    static func parseFrames(from data: Data) -> [RaceFrame] {
+        let bytes = [UInt8](data)
+        var frames: [RaceFrame] = []
+        var offset = 0
+
+        while offset < bytes.count {
+            guard let (frame, consumed) = parseOne(bytes, at: offset) else { break }
+            frames.append(frame)
+            offset += consumed
+        }
+
+        return frames
+    }
+
+    private static func parseOne(_ bytes: [UInt8], at offset: Int) -> (RaceFrame, Int)? {
+        let remaining = bytes.count - offset
+        guard remaining >= minimumFrameBytes else { return nil }
+        guard bytes[offset] == 0x05 else { return nil }
+        guard let type = RaceFrameType(rawValue: bytes[offset + 1]) else { return nil }
+
+        let len = Int(bytes[offset + 2]) | (Int(bytes[offset + 3]) << 8)
+        guard len >= 2 else { return nil } // len must at least cover the id16 field
+        let totalFrameBytes = 4 + len
+        guard remaining >= totalFrameBytes else { return nil } // truncated — not enough bytes yet
+
+        let id = UInt16(bytes[offset + 4]) | (UInt16(bytes[offset + 5]) << 8)
+        let payload = Data(bytes[(offset + 6)..<(offset + totalFrameBytes)])
+
+        return (RaceFrame(type: type, id: id, payload: payload), totalFrameBytes)
+    }
+}
+
+/// Recognizes the one event type Phase 2a understands; everything else is left for the caller to
+/// log at debug level and ignore.
+enum RaceEvent: Equatable {
+    case noiseMode(NoiseMode)
+}
+
+enum RaceEventRecognizer {
+    /// id16 LE for bytes `01 09` (protocol.md §4).
+    private static let noiseModeEventID: UInt16 = 0x0901
+    private static let noiseModeEventPrefix: [UInt8] = [0x05, 0x00, 0x00]
+
+    static func recognize(_ frame: RaceFrame) -> RaceEvent? {
+        guard frame.type == .event, frame.id == noiseModeEventID else { return nil }
+        let bytes = [UInt8](frame.payload)
+        guard bytes.count == 4, Array(bytes.prefix(3)) == noiseModeEventPrefix else { return nil }
+        return .noiseMode(NoiseMode(raceModeByte: bytes[3]))
+    }
+}
+
+extension NoiseMode {
+    /// Maps the mode byte from a noise-mode event (protocol.md §4). `0x00` was only ever observed
+    /// right after a TalkThru command and protocol.md flags its meaning as unconfirmed — mapped to
+    /// .talkThru here as the best available evidence, not a certainty.
+    init(raceModeByte byte: UInt8) {
+        switch byte {
+        case 0x0A: self = .ambientAware
+        case 0x01: self = .off
+        case 0x09: self = .anc
+        case 0x00: self = .talkThru
+        default: self = .unknown
+        }
+    }
+}
