@@ -40,6 +40,7 @@ final class NotchPanel: NSPanel {
     private let uiState = NotchUIState()
     private let onSelectNoiseMode: (CommandableNoiseMode) -> Void
     private let isModeVerified: (CommandableNoiseMode) -> Bool
+    private let supportsNoiseControl: () -> Bool
 
     private let silhouette = NotchSilhouetteView(frame: .zero)
     private var hosting: NSHostingView<NotchView>!
@@ -68,11 +69,13 @@ final class NotchPanel: NSPanel {
 
     init(
         headphoneState: HeadphoneState, onSelectNoiseMode: @escaping (CommandableNoiseMode) -> Void,
-        isModeVerified: @escaping (CommandableNoiseMode) -> Bool
+        isModeVerified: @escaping (CommandableNoiseMode) -> Bool,
+        supportsNoiseControl: @escaping () -> Bool
     ) {
         self.headphoneState = headphoneState
         self.onSelectNoiseMode = onSelectNoiseMode
         self.isModeVerified = isModeVerified
+        self.supportsNoiseControl = supportsNoiseControl
 
         let resolution = Self.resolveScreen()
         let screen = resolution.screen
@@ -101,7 +104,8 @@ final class NotchPanel: NSPanel {
         hosting = NSHostingView(
             rootView: NotchView(
                 state: headphoneState, uiState: uiState, collapsedSize: initialGeometry.collapsedSize,
-                onSelectNoiseMode: onSelectNoiseMode, isModeVerified: isModeVerified
+                onSelectNoiseMode: onSelectNoiseMode, isModeVerified: isModeVerified,
+                supportsNoiseControl: supportsNoiseControl
             )
         )
         // NSHostingView does not clip its own content to its frame by default — if the SwiftUI
@@ -389,7 +393,8 @@ final class NotchPanel: NSPanel {
         let probe = NSHostingView(
             rootView: NotchView(
                 state: headphoneState, uiState: probeState, collapsedSize: geometry.collapsedSize,
-                onSelectNoiseMode: { _ in }, isModeVerified: isModeVerified
+                onSelectNoiseMode: { _ in }, isModeVerified: isModeVerified,
+                supportsNoiseControl: supportsNoiseControl
             )
         )
         probe.frame = CGRect(x: 0, y: 0, width: max(width, 1), height: 1)

@@ -4,7 +4,8 @@ import IOBluetooth
 /// Profile for the JBL Tune 770NC, derived from the Bluetooth recon in ~/jbl-recon.
 struct Tune770NCProfile: DeviceProfile {
     let displayName = "JBL Tune 770NC"
-    let classicAddress = "00:A4:1C:AA:44:79"
+    let classicNameMatch = "770NC"
+    let knownClassicAddress: String? = "00:A4:1C:AA:44:79"
 
     let bleScanServiceUUID = CBUUID(string: "5052494D-2DAB-0341-6972-6F6861424C45")
     let bleExpectedName = "JBL Tune 770NC-LE"

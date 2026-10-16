@@ -34,7 +34,7 @@ struct JBLCompanionApp: App {
     private var menuContent: some View {
         let state = appDelegate.headphoneState
         Text(state.connection == .connected ? "Connected: \(state.deviceName)" : "Not connected")
-        Text(state.batteryPercent.map { "\($0)%" } ?? "—")
+        Text(state.batteryPercentIsUnverifiedZero ? "--" : (state.batteryPercent.map { "\($0)%" } ?? "—"))
         noiseModeMenuSection
         Divider()
         Toggle("Show notch circle", isOn: $showNotchCircle)

@@ -4,19 +4,23 @@ import os.log
 
 @MainActor
 protocol ClassicConnectionMonitorDelegate: AnyObject {
-    func classicConnectionMonitorDidConnect(_ monitor: ClassicConnectionMonitor)
+    func classicConnectionMonitor(
+        _ monitor: ClassicConnectionMonitor, didConnect profile: DeviceProfile,
+        address: String, addressConfirmed: Bool
+    )
     func classicConnectionMonitorDidDisconnect(_ monitor: ClassicConnectionMonitor)
 }
 
-/// Watches for the classic (BR/EDR) connection state of one specific device, matched only by
-/// Bluetooth address (never by name — multiple JBL devices may be paired at once).
+/// Watches for the classic (BR/EDR) connection state of any device matching one of several known
+/// DeviceProfiles (DeviceProfileMatcher — primarily by name, never requiring an address match, so
+/// an unrecognized unit of a known model is still picked up).
 ///
 /// Combines two independent signals: IOBluetoothDevice's real connect/disconnect notifications
 /// (the normal, ongoing way state changes are detected), and a ClassicConnectionPoller (see its
 /// own doc comment) specifically to catch a device that was already connected before this process
 /// started — notifications only fire on a *new* connect event, so a device that's been connected
 /// since before launch produces no notification at all. Whichever signal reports the connection
-/// first wins; `attach(to:)` is idempotent against the other one arriving late.
+/// first wins; `attach(to:match:)` is idempotent against the other one arriving late.
 ///
 /// @MainActor so it can hold the MainActor-isolated poller directly. Confirmed by a real crash
 /// (EXC_BREAKPOINT in MainActor.assumeIsolated, 2026-10-16) that IOBluetoothUserNotification
@@ -27,7 +31,7 @@ protocol ClassicConnectionMonitorDelegate: AnyObject {
 @MainActor
 final class ClassicConnectionMonitor: NSObject {
     private let logger = Logger(subsystem: "com.davidejere.JBLCompanion", category: "ClassicConnectionMonitor")
-    private let targetAddress: String
+    private let profiles: [DeviceProfile]
 
     private var connectNotification: IOBluetoothUserNotification?
     private var disconnectNotification: IOBluetoothUserNotification?
@@ -36,8 +40,8 @@ final class ClassicConnectionMonitor: NSObject {
 
     weak var delegate: ClassicConnectionMonitorDelegate?
 
-    init(classicAddress: String) {
-        self.targetAddress = Self.normalize(classicAddress)
+    init(profiles: [DeviceProfile]) {
+        self.profiles = profiles
         super.init()
     }
 
@@ -56,17 +60,28 @@ final class ClassicConnectionMonitor: NSObject {
         )
 
         let poller = ClassicConnectionPoller(
-            checkIsConnected: { [weak self] in
-                guard let self else { return false }
-                return IOBluetoothDevice(addressString: self.targetAddress)?.isConnected() ?? false
-            },
+            checkIsConnected: { [weak self] in self?.findConnectedMatchingDevice() != nil },
             onConnected: { [weak self] _ in
-                guard let self, let device = IOBluetoothDevice(addressString: self.targetAddress) else { return }
-                self.attach(to: device)
+                guard let self, let found = self.findConnectedMatchingDevice() else { return }
+                self.attach(to: found.device, match: found.match)
             }
         )
         self.poller = poller
         poller.start()
+    }
+
+    /// Scans every paired device for the first one that's both actually connected and matches one
+    /// of our known profiles — used both by the poller's "already connected at launch" check and,
+    /// once it fires, to retrieve the actual matched device (a second pass is simpler and just as
+    /// correct as threading the first pass's result through the poller's own Bool-returning API).
+    private func findConnectedMatchingDevice() -> (device: IOBluetoothDevice, match: DeviceProfileMatcher.Match)? {
+        let paired = (IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice]) ?? []
+        for device in paired {
+            guard device.isConnected(), let name = device.name, let address = device.addressString else { continue }
+            guard let match = DeviceProfileMatcher.match(name: name, address: address, against: profiles) else { continue }
+            return (device, match)
+        }
+        return nil
     }
 
     func stop() {
@@ -82,13 +97,14 @@ final class ClassicConnectionMonitor: NSObject {
     @objc private nonisolated func handleConnectNotification(notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            guard Self.normalize(device.addressString ?? "") == self.targetAddress else { return }
-            self.logger.info("Classic device connected via notification")
-            self.attach(to: device)
+            guard let name = device.name, let address = device.addressString,
+                  let match = DeviceProfileMatcher.match(name: name, address: address, against: self.profiles) else { return }
+            self.logger.info("Classic device connected via notification, matched profile \(match.profile.displayName, privacy: .public)")
+            self.attach(to: device, match: match)
         }
     }
 
-    private func attach(to device: IOBluetoothDevice) {
+    private func attach(to device: IOBluetoothDevice, match: DeviceProfileMatcher.Match) {
         guard connectedDevice == nil else { return }
         poller?.stop()
         connectedDevice = device
@@ -96,8 +112,11 @@ final class ClassicConnectionMonitor: NSObject {
             forDisconnectNotification: self,
             selector: #selector(handleDisconnectNotification(notification:device:))
         )
-        logger.info("Classic device connected: \(device.addressString ?? "unknown", privacy: .public)")
-        delegate?.classicConnectionMonitorDidConnect(self)
+        let address = device.addressString ?? "unknown"
+        logger.info(
+            "Classic device connected: \(address, privacy: .public) matched profile=\(match.profile.displayName, privacy: .public) nameMatch=\(match.profile.classicNameMatch, privacy: .public) addressConfirmed=\(match.addressConfirmed, privacy: .public)"
+        )
+        delegate?.classicConnectionMonitor(self, didConnect: match.profile, address: address, addressConfirmed: match.addressConfirmed)
     }
 
     @objc private nonisolated func handleDisconnectNotification(notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {

@@ -45,8 +45,13 @@ final class RFCOMMRaceLink: NSObject {
 
     weak var delegate: RFCOMMRaceLinkDelegate?
 
-    init(profile: DeviceProfile) {
-        self.classicAddress = profile.classicAddress
+    /// `classicAddress` is the actual connected device's real address (from ClassicConnectionMonitor's
+    /// match), not derived from `profile.knownClassicAddress` — that field is only ever a
+    /// confirmation signal for DeviceProfileMatcher/diagnostics, never something hardware
+    /// operations should rely on, since it can be nil or stale for a unit DeviceProfileMatcher
+    /// still recognized purely by name.
+    init(profile: DeviceProfile, classicAddress: String) {
+        self.classicAddress = classicAddress
         self.channelID = profile.raceRFCOMMChannelID
         super.init()
     }

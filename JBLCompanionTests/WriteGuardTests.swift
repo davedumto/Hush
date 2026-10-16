@@ -78,6 +78,30 @@ final class WriteGuardTests: XCTestCase {
         XCTAssertFalse(profile.isModeVerified(.off))
     }
 
+    // MARK: - Tune670NCProfile (battery/status only — no control writes yet)
+
+    func testTune670NCProfileHasAnEmptyAllowlist() {
+        let profile = Tune670NCProfile()
+        XCTAssertTrue(profile.writeAllowlist.isEmpty)
+    }
+
+    func testWriteGuardRefusesEveryKnownCommandFrameForThe670NC() {
+        let profile = Tune670NCProfile()
+        let guardInstance = WriteGuard(allowlist: profile.writeAllowlist)
+
+        for mode in CommandableNoiseMode.allCases {
+            guard let frame = mode.commandFrame else { continue }
+            XCTAssertFalse(guardInstance.isAllowed(payload: frame), "\(mode) must be refused — the 670NC has no verified writes")
+        }
+    }
+
+    func testTune670NCProfileFlagsEveryModeAsUnverified() {
+        let profile = Tune670NCProfile()
+        for mode in CommandableNoiseMode.allCases {
+            XCTAssertFalse(profile.isModeVerified(mode))
+        }
+    }
+
     func testDefaultProtocolExtensionTreatsEveryModeAsUnverified() {
         // GenericProfile doesn't override isModeVerified, so it should fall through to the
         // protocol extension's default (false for everything) rather than crash or assume true.

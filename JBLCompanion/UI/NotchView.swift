@@ -21,6 +21,10 @@ struct NotchView: View {
     /// ever been captured), so its segment stays visible but permanently disabled rather than
     /// disappearing — see NoiseControlCommander.commandFrame's doc comment.
     let isModeVerified: (CommandableNoiseMode) -> Bool
+    /// Whether the connected device's own model has noise control wired up at all
+    /// (DeviceProfile.supportsNoiseControl) — false hides the segmented control entirely in favor
+    /// of a "not available" message, distinct from a verified-but-disabled segment.
+    let supportsNoiseControl: () -> Bool
 
     /// JBL's own brand orange — used sparingly, as the one accent color against the black shape.
     private let accent = Color(red: 1.0, green: 0.45, blue: 0.05)
@@ -42,6 +46,13 @@ struct NotchView: View {
             .font(.system(size: min(collapsedSize.width, collapsedSize.height) * 0.5, weight: .medium))
             .foregroundStyle(state.connection == .connected ? accent : .gray)
             .frame(width: collapsedSize.width, height: collapsedSize.height)
+    }
+
+    /// "--" for an untrusted 0% reading (BatteryReadingPolicy) — distinct from "—", which means no
+    /// reading at all.
+    private var batteryDisplayText: String {
+        if state.batteryPercentIsUnverifiedZero { return "--" }
+        return state.batteryPercent.map { "\($0)%" } ?? "—"
     }
 
     private var batteryRingColor: Color {
@@ -92,7 +103,7 @@ struct NotchView: View {
                     Image(systemName: batteryIconName)
                         .font(.system(size: 11))
                         .foregroundStyle(batteryRingColor)
-                    Text(state.batteryPercent.map { "\($0)%" } ?? "—")
+                    Text(batteryDisplayText)
                         .font(.system(size: 12))
                         .foregroundStyle(.white.opacity(0.65))
                 }
@@ -110,8 +121,14 @@ struct NotchView: View {
                 .tracking(0.8)
                 .foregroundStyle(.white.opacity(0.4))
 
-            modeSegments
-            statusCaption
+            if state.connection == .connected && !supportsNoiseControl() {
+                Text("Controls not available for this model yet")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.5))
+            } else {
+                modeSegments
+                statusCaption
+            }
         }
     }
 

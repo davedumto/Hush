@@ -1,18 +1,45 @@
 import AppKit
 import os.log
 
+/// Bundles the per-connection objects (write guard, BLE battery link, RFCOMM RACE link, noise
+/// control commander/coordinator) for whichever DeviceProfile actually matched the device that
+/// just connected. AppDelegate no longer builds these once against one hardcoded profile at
+/// launch — see ClassicConnectionMonitor/DeviceProfileMatcher for why a profile is now chosen
+/// dynamically, from the real connected device's name.
+@MainActor
+private final class ActiveDeviceSession {
+    let profile: DeviceProfile
+    let connectedAddress: String
+    let addressConfirmed: Bool
+    let writeGuard: WriteGuard
+    let bleLink: BLEBatteryLink
+    let rfcommLink: RFCOMMRaceLink
+    let noiseControlCommander: NoiseControlCommander
+    let noiseModeCoordinator: NoiseModeRequestCoordinator
+
+    init(profile: DeviceProfile, connectedAddress: String, addressConfirmed: Bool, state: HeadphoneState) {
+        self.profile = profile
+        self.connectedAddress = connectedAddress
+        self.addressConfirmed = addressConfirmed
+        let writeGuard = WriteGuard(allowlist: profile.writeAllowlist)
+        let rfcommLink = RFCOMMRaceLink(profile: profile, classicAddress: connectedAddress)
+        let noiseControlCommander = NoiseControlCommander(writeGuard: writeGuard, transport: rfcommLink)
+        self.writeGuard = writeGuard
+        self.bleLink = BLEBatteryLink(profile: profile)
+        self.rfcommLink = rfcommLink
+        self.noiseControlCommander = noiseControlCommander
+        self.noiseModeCoordinator = NoiseModeRequestCoordinator(state: state, sender: noiseControlCommander)
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let logger = Logger(subsystem: "com.davidejere.JBLCompanion", category: "AppDelegate")
 
     let headphoneState = HeadphoneState()
-    private let profile: DeviceProfile = Tune770NCProfile()
-    private lazy var writeGuard = WriteGuard(allowlist: profile.writeAllowlist)
-    private lazy var classicMonitor = ClassicConnectionMonitor(classicAddress: profile.classicAddress)
-    private lazy var bleLink = BLEBatteryLink(profile: profile)
-    private lazy var rfcommLink = RFCOMMRaceLink(profile: profile)
-    private lazy var noiseControlCommander = NoiseControlCommander(writeGuard: writeGuard, transport: rfcommLink)
-    private lazy var noiseModeCoordinator = NoiseModeRequestCoordinator(state: headphoneState, sender: noiseControlCommander)
+    private let profiles: [DeviceProfile] = [Tune770NCProfile(), Tune670NCProfile()]
+    private lazy var classicMonitor = ClassicConnectionMonitor(profiles: profiles)
+    private var activeSession: ActiveDeviceSession?
     private var panel: NotchPanel?
     private var fallbackStatusItem: NSStatusItem?
 
@@ -32,20 +59,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupFallbackStatusItem()
 
         classicMonitor.delegate = self
-        bleLink.delegate = self
-        rfcommLink.delegate = self
 
         let panel = NotchPanel(
             headphoneState: headphoneState,
             onSelectNoiseMode: { [weak self] mode in self?.requestNoiseMode(mode) },
-            isModeVerified: { [weak self] mode in self?.isModeVerified(mode) ?? false }
+            isModeVerified: { [weak self] mode in self?.isModeVerified(mode) ?? false },
+            supportsNoiseControl: { [weak self] in self?.activeSession?.profile.supportsNoiseControl ?? false }
         )
         self.panel = panel
         let showCircle = UserDefaults.standard.object(forKey: "showNotchCircle") as? Bool ?? true
         panel.setVisible(showCircle)
 
         classicMonitor.start()
-        logger.info("JBLCompanion launched; monitoring classic address \(self.profile.classicAddress, privacy: .public)")
+        logger.info("JBLCompanion launched; watching for: \(self.profiles.map(\.displayName).joined(separator: ", "), privacy: .public)")
     }
 
     // MARK: - AppKit status-item fallback (always present — see applicationDidFinishLaunching)
@@ -126,20 +152,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Whether `mode`'s command frame is independently verified — the segmented control and the
     /// menu bar dropdown both gate on this, not just on link readiness, since an unverified
-    /// command frame could be sending something other than what it's labeled.
+    /// command frame could be sending something other than what it's labeled. False whenever no
+    /// profile is actively connected.
     func isModeVerified(_ mode: CommandableNoiseMode) -> Bool {
-        profile.isModeVerified(mode)
+        activeSession?.profile.isModeVerified(mode) ?? false
     }
 
     func requestNoiseMode(_ mode: CommandableNoiseMode) {
-        noiseModeCoordinator.requestMode(mode)
+        activeSession?.noiseModeCoordinator.requestMode(mode)
     }
 
     #if DEBUG
     /// Every mode currently verified — exactly what "Send test frame…" offers, so the Debug menu
     /// never exposes a way to test (or accidentally send) an unverified command.
     var debugTestableModes: [CommandableNoiseMode] {
-        CommandableNoiseMode.allCases.filter { profile.isModeVerified($0) }
+        guard let profile = activeSession?.profile else { return [] }
+        return CommandableNoiseMode.allCases.filter { profile.isModeVerified($0) }
     }
 
     /// Sends `mode` through the exact same path as a normal tap (still behind WriteGuard, the
@@ -154,15 +182,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Plain-text snapshot of the noise-control link's state, for the "Copy Diagnostics" menu
     /// item. Read-only — only reads already-tracked state, never touches the headphones.
     func diagnosticsText() -> String {
+        guard let session = activeSession else {
+            return """
+            JBLCompanion diagnostics
+            Matched profile: none
+            Classic connection: \(classicMonitor.isConnectedDescription)
+            HeadphoneState.connection: \(headphoneState.connection)
+            """
+        }
         return """
         JBLCompanion diagnostics
+        Matched profile: \(session.profile.displayName) (classicNameMatch=\(session.profile.classicNameMatch), addressConfirmed=\(session.addressConfirmed))
+        Connected address: \(session.connectedAddress)
         Classic connection: \(classicMonitor.isConnectedDescription)
         HeadphoneState.connection: \(headphoneState.connection)
-        RFCOMM state: \(rfcommLink.channelStateDescription)
-        Last RFCOMM open IOReturn: \(rfcommLink.lastOpenIOReturn ?? "never attempted")
-        RFCOMM open retry count: \(rfcommLink.openRetryCount)
-        Last frames received: \(rfcommLink.recentFrameDescriptions.isEmpty ? "none" : rfcommLink.recentFrameDescriptions.joined(separator: " | "))
-        Reassembler stats: \(rfcommLink.reassemblerStatsDescription)
+        RFCOMM state: \(session.rfcommLink.channelStateDescription)
+        Last RFCOMM open IOReturn: \(session.rfcommLink.lastOpenIOReturn ?? "never attempted")
+        RFCOMM open retry count: \(session.rfcommLink.openRetryCount)
+        Last frames received: \(session.rfcommLink.recentFrameDescriptions.isEmpty ? "none" : session.rfcommLink.recentFrameDescriptions.joined(separator: " | "))
+        Reassembler stats: \(session.rfcommLink.reassemblerStatsDescription)
         Noise mode: \(headphoneState.noiseMode.displayText)
         Pending noise mode: \(headphoneState.pendingNoiseMode?.displayText ?? "none")
         """
@@ -170,36 +208,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 extension AppDelegate: ClassicConnectionMonitorDelegate {
-    func classicConnectionMonitorDidConnect(_ monitor: ClassicConnectionMonitor) {
+    func classicConnectionMonitor(
+        _ monitor: ClassicConnectionMonitor, didConnect profile: DeviceProfile,
+        address: String, addressConfirmed: Bool
+    ) {
+        logger.info(
+            "Classic connect: matched profile=\(profile.displayName, privacy: .public) because classicNameMatch=\(profile.classicNameMatch, privacy: .public) addressConfirmed=\(addressConfirmed, privacy: .public)"
+        )
+
+        let session = ActiveDeviceSession(profile: profile, connectedAddress: address, addressConfirmed: addressConfirmed, state: headphoneState)
+        activeSession = session
+        session.bleLink.delegate = self
+        session.rfcommLink.delegate = self
+
         headphoneState.connection = .connected
         headphoneState.deviceName = profile.displayName
         headphoneState.lastUpdated = Date()
-        bleLink.startMonitoring()
-        rfcommLink.handleClassicConnected()
+
+        session.bleLink.startMonitoring()
+        // RFCOMM is only ever opened for a profile that actually supports noise control — see
+        // DeviceProfile.supportsNoiseControl's own doc comment. The 670NC's channel 21 is
+        // SDP-confirmed present but deliberately never opened yet.
+        if profile.supportsNoiseControl {
+            session.rfcommLink.handleClassicConnected()
+        }
         panel?.handleClassicConnected()
     }
 
     func classicConnectionMonitorDidDisconnect(_ monitor: ClassicConnectionMonitor) {
         headphoneState.connection = .disconnected
         headphoneState.batteryPercent = nil
+        headphoneState.batteryPercentIsUnverifiedZero = false
         headphoneState.deviceName = ""
         headphoneState.pendingNoiseMode = nil
         headphoneState.noiseModeConfirmationTimedOut = false
         headphoneState.noiseMode = .unknown
-        bleLink.stopMonitoring()
-        rfcommLink.handleClassicDisconnected()
+        activeSession?.bleLink.stopMonitoring()
+        activeSession?.rfcommLink.handleClassicDisconnected()
+        activeSession = nil
         panel?.handleClassicDisconnected()
     }
 }
 
 extension AppDelegate: BLEBatteryLinkDelegate {
     func bleBatteryLink(_ link: BLEBatteryLink, didUpdateBatteryPercent percent: Int) {
-        headphoneState.batteryPercent = percent
+        let trustsZero = activeSession?.profile.trustsZeroBatteryReading ?? true
+        let result = BatteryReadingPolicy.apply(rawPercent: percent, trustsZeroBatteryReading: trustsZero)
+        if result.isUnverifiedZero {
+            logger.warning(
+                "Treating 0% battery from \(self.activeSession?.profile.displayName ?? "unknown", privacy: .public) as unverified; raw value=\(percent, privacy: .public)"
+            )
+        }
+        headphoneState.batteryPercent = result.displayPercent
+        headphoneState.batteryPercentIsUnverifiedZero = result.isUnverifiedZero
         headphoneState.lastUpdated = Date()
     }
 
     func bleBatteryLinkDidDisconnect(_ link: BLEBatteryLink) {
         headphoneState.batteryPercent = nil
+        headphoneState.batteryPercentIsUnverifiedZero = false
     }
 }
 
@@ -216,7 +283,7 @@ extension AppDelegate: NSMenuDelegate {
 
 extension AppDelegate: RFCOMMRaceLinkDelegate {
     func rfcommRaceLink(_ link: RFCOMMRaceLink, didUpdateNoiseMode mode: NoiseMode) {
-        noiseModeCoordinator.handleConfirmation(mode)
+        activeSession?.noiseModeCoordinator.handleConfirmation(mode)
         #if DEBUG
         if headphoneState.debugRecentEvents.count < 5 {
             headphoneState.debugRecentEvents.append("\(Date().formatted(date: .omitted, time: .standard)): \(mode.displayText)")

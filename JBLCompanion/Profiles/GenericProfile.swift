@@ -6,7 +6,10 @@ import IOBluetooth
 /// than one conformer and future multi-device support has somewhere to start.
 struct GenericProfile: DeviceProfile {
     let displayName = "Unknown Headphones"
-    let classicAddress = ""
+    // Empty on purpose — DeviceProfileMatcher treats an empty classicNameMatch as "never matches"
+    // rather than "matches everything" (which `name.contains("")` would otherwise give it).
+    let classicNameMatch = ""
+    let knownClassicAddress: String? = nil
 
     let bleScanServiceUUID = CBUUID(string: "1812")
     let bleExpectedName = ""

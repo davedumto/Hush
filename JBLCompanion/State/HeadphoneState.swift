@@ -63,6 +63,9 @@ final class HeadphoneState {
     var connection: ConnectionState = .disconnected
     var deviceName: String = ""
     var batteryPercent: Int?
+    /// True when the last battery reading was an untrusted 0% (BatteryReadingPolicy), shown as
+    /// "--" in the card — distinct from `batteryPercent == nil`, which means no reading at all.
+    var batteryPercentIsUnverifiedZero: Bool = false
     var noiseMode: NoiseMode = .unknown
     var lastUpdated: Date?
 
