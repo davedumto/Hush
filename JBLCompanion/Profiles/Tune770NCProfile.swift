@@ -16,9 +16,16 @@ struct Tune770NCProfile: DeviceProfile {
     // phase listens on (ATT handles 0x0053/0x0055 per protocol.md).
     let raceServiceUUID: CBUUID? = CBUUID(string: "5052494D-2DAB-0341-6972-6F6861424C45")
 
-    // Listening-only for now: Phase 2a parses noise-mode events but cannot yet control anything.
-    let supportsNoiseControl = false
+    let supportsNoiseControl = true
 
-    // Phase 1 performs no writes at all; kept empty until the RACE protocol is independently proven safe.
-    let writeAllowlist: [WriteAllowlistEntry] = []
+    // Exactly the three confirmed noise-mode commands (protocol.md / iPad capture), each tied to
+    // the RACE service, the write-without-response characteristic, and its full byte frame.
+    // TalkThru's frame was never confirmed by a matching event and is deliberately not here.
+    let writeAllowlist: [WriteAllowlistEntry] = CommandableNoiseMode.allCases.map { mode in
+        WriteAllowlistEntry(
+            serviceUUID: CBUUID(string: "5052494D-2DAB-0341-6972-6F6861424C45"),
+            characteristicUUID: CBUUID(string: "43484152-2DAB-3241-6972-6F6861424C45"),
+            payload: mode.commandFrame
+        )
+    }
 }
