@@ -67,7 +67,13 @@ extension AppDelegate: BLEBatteryLinkDelegate {
         headphoneState.lastUpdated = Date()
     }
 
+    func bleBatteryLink(_ link: BLEBatteryLink, didUpdateNoiseMode mode: NoiseMode) {
+        headphoneState.noiseMode = mode
+        headphoneState.lastUpdated = Date()
+    }
+
     func bleBatteryLinkDidDisconnect(_ link: BLEBatteryLink) {
         headphoneState.batteryPercent = nil
+        headphoneState.noiseMode = .unknown
     }
 }

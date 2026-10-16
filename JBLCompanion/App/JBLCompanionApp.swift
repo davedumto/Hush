@@ -25,6 +25,7 @@ struct JBLCompanionApp: App {
         let state = appDelegate.headphoneState
         Text(state.connection == .connected ? "Connected: \(state.deviceName)" : "Not connected")
         Text(state.batteryPercent.map { "\($0)%" } ?? "—")
+        Text("Noise mode: \(state.noiseMode.displayText)")
         Divider()
         Toggle("Show notch circle", isOn: $showNotchCircle)
         VStack(alignment: .leading) {

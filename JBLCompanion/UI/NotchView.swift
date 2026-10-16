@@ -64,6 +64,10 @@ struct NotchView: View {
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.8))
 
+            Text("Noise mode: \(state.noiseMode.displayText)")
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.8))
+
             VStack(alignment: .leading, spacing: 6) {
                 Toggle("ANC", isOn: .constant(false)).disabled(true)
                 Toggle("Ambient Aware", isOn: .constant(false)).disabled(true)
