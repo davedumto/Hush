@@ -10,6 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var writeGuard = WriteGuard(allowlist: profile.writeAllowlist)
     private lazy var classicMonitor = ClassicConnectionMonitor(classicAddress: profile.classicAddress)
     private lazy var bleLink = BLEBatteryLink(profile: profile)
+    private lazy var noiseControlCommander = NoiseControlCommander(profile: profile, writeGuard: writeGuard, transport: bleLink)
+    private lazy var noiseModeCoordinator = NoiseModeRequestCoordinator(state: headphoneState, sender: noiseControlCommander)
     private var panel: NotchPanel?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -24,7 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         classicMonitor.delegate = self
         bleLink.delegate = self
 
-        let panel = NotchPanel(headphoneState: headphoneState)
+        let panel = NotchPanel(headphoneState: headphoneState, onSelectNoiseMode: { [weak self] mode in
+            self?.requestNoiseMode(mode)
+        })
         self.panel = panel
         let showCircle = UserDefaults.standard.object(forKey: "showNotchCircle") as? Bool ?? true
         panel.setVisible(showCircle)
@@ -37,16 +41,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel?.setVisible(visible)
     }
 
-    var notchPositionState: NotchPositionState? {
-        panel?.positionState
+    /// Call after any IslandSettings change (size, silhouette, fits, outline, display) so the
+    /// panel re-resolves its geometry and re-presents at the current size.
+    func notchSettingsDidChange() {
+        panel?.settingsDidChange()
     }
 
-    func setNotchPosition(_ position: NotchPosition) {
-        panel?.setPosition(position)
+    var isCurrentDisplayNotched: Bool {
+        panel?.isNotched ?? false
     }
 
-    func resetNotchPosition() {
-        panel?.resetPosition()
+    func requestNoiseMode(_ mode: CommandableNoiseMode) {
+        noiseModeCoordinator.requestMode(mode)
     }
 }
 
@@ -63,6 +69,8 @@ extension AppDelegate: ClassicConnectionMonitorDelegate {
         headphoneState.connection = .disconnected
         headphoneState.batteryPercent = nil
         headphoneState.deviceName = ""
+        headphoneState.pendingNoiseMode = nil
+        headphoneState.noiseModeConfirmationTimedOut = false
         headphoneState.noiseMode = .unknown
         bleLink.stopMonitoring()
         panel?.handleClassicDisconnected()
@@ -76,12 +84,13 @@ extension AppDelegate: BLEBatteryLinkDelegate {
     }
 
     func bleBatteryLink(_ link: BLEBatteryLink, didUpdateNoiseMode mode: NoiseMode) {
-        headphoneState.noiseMode = mode
-        headphoneState.lastUpdated = Date()
+        noiseModeCoordinator.handleConfirmation(mode)
     }
 
     func bleBatteryLinkDidDisconnect(_ link: BLEBatteryLink) {
         headphoneState.batteryPercent = nil
+        headphoneState.pendingNoiseMode = nil
+        headphoneState.noiseModeConfirmationTimedOut = false
         headphoneState.noiseMode = .unknown
     }
 }
