@@ -174,7 +174,9 @@ struct IslandGeometry: Equatable {
         case .spacious: chosen = IslandSize.spaciousWidth
         case .custom: chosen = customWidth
         }
-        return min(max(chosen, cameraWidth + 36), screen.width - 24)
+        // A floor of 100pt guards against a degenerate (e.g. zero-size) screen read ever
+        // producing a negative or near-zero width.
+        return max(100, min(max(chosen, cameraWidth + 36), screen.width - 24))
     }
 
     /// Height from the page's own content, capped at the screen and (when custom sizing is
@@ -182,7 +184,7 @@ struct IslandGeometry: Equatable {
     func expandedSize(contentHeight: CGFloat, topInset: CGFloat) -> CGSize {
         let heightCap = layout == .custom ? customHeight : IslandSize.defaultHeight
         let preferred = min(topInset + contentHeight, heightCap)
-        return CGSize(width: expandedWidth, height: min(preferred, screen.height - 48))
+        return CGSize(width: expandedWidth, height: max(80, min(preferred, screen.height - 48)))
     }
 
     /// Centered on the display, pinned to its top edge. No surfaceShift term — that only exists

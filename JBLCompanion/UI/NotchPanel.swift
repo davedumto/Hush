@@ -58,7 +58,6 @@ final class NotchPanel: NSPanel {
 
     private let hoverOpenDelay: TimeInterval = 0.15
     private let hoverCloseDelay: TimeInterval = 0.4
-    private let expandedContentHeight: CGFloat = 150
     private let expandedTopInset: CGFloat = 16
 
     init(headphoneState: HeadphoneState, onSelectNoiseMode: @escaping (CommandableNoiseMode) -> Void) {
@@ -91,8 +90,14 @@ final class NotchPanel: NSPanel {
                 onSelectNoiseMode: onSelectNoiseMode
             )
         )
+        // NSHostingView does not clip its own content to its frame by default — if the SwiftUI
+        // content ever wants more room than it's given, it must never visibly spill past the
+        // silhouette's edges, even if the size estimate below is ever imperfect.
+        hosting.wantsLayer = true
+        hosting.layer?.masksToBounds = true
 
         let container = NSView(frame: NSRect(origin: .zero, size: initialGeometry.collapsedSize))
+        container.wantsLayer = true
         container.addSubview(silhouette)
         container.addSubview(hosting)
         contentView = container
@@ -308,7 +313,28 @@ final class NotchPanel: NSPanel {
     }
 
     private func expandedSize(for geometry: IslandGeometry) -> CGSize {
-        geometry.expandedSize(contentHeight: expandedContentHeight, topInset: expandedTopInset)
+        let width = geometry.expandedWidth
+        let contentHeight = measuredExpandedContentHeight(width: width)
+        return geometry.expandedSize(contentHeight: contentHeight, topInset: expandedTopInset)
+    }
+
+    /// Measures the real height the expanded card's SwiftUI content needs at `width`, instead of
+    /// guessing a constant — a throwaway probe view so the live `hosting` view's own state/frame
+    /// is never disturbed by the measurement itself.
+    private func measuredExpandedContentHeight(width: CGFloat) -> CGFloat {
+        let probeState = NotchUIState()
+        probeState.isExpanded = true
+        let probe = NSHostingView(
+            rootView: NotchView(
+                state: headphoneState, uiState: probeState, collapsedSize: geometry.collapsedSize,
+                onSelectNoiseMode: { _ in }
+            )
+        )
+        probe.frame = CGRect(x: 0, y: 0, width: max(width, 1), height: 1)
+        probe.layoutSubtreeIfNeeded()
+        let height = probe.fittingSize.height
+        guard height.isFinite, height > 0 else { return 150 } // sane fallback if measurement ever fails
+        return height
     }
 
     // MARK: - Present (envelope-then-settle resize)
