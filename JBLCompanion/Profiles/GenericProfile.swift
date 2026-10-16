@@ -13,6 +13,8 @@ struct GenericProfile: DeviceProfile {
     let batteryServiceUUID = CBUUID(string: "180F")
     let batteryLevelUUID = CBUUID(string: "2A19")
 
+    let raceServiceUUID: CBUUID? = nil
+
     let supportsNoiseControl = false
 
     let writeAllowlist: [WriteAllowlistEntry] = []

@@ -27,6 +27,11 @@ protocol DeviceProfile {
     var batteryServiceUUID: CBUUID { get }
     var batteryLevelUUID: CBUUID { get }
 
+    /// The vendor control ("RACE") service, if this device has one. Its notify/write-without-response
+    /// characteristics are discovered dynamically by properties, never hardcoded, so this is only
+    /// used as a discovery filter — nil means "this device has no such service, don't look for one."
+    var raceServiceUUID: CBUUID? { get }
+
     var supportsNoiseControl: Bool { get }
 
     /// WriteGuard's allowlist for this device. Empty means every write is rejected.
