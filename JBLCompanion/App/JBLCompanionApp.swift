@@ -47,6 +47,8 @@ struct JBLCompanionApp: App {
         let state = appDelegate.headphoneState
         if let pending = state.pendingNoiseMode {
             Text("Noise mode: Pending \(pending.displayText)…")
+        } else if state.raceLinkStatus == .needsPairing {
+            Text(RaceLinkStatus.needsPairingMessage)
         } else if state.noiseModeConfirmationTimedOut {
             Text("Noise mode: no confirmation")
         } else {
@@ -54,7 +56,7 @@ struct JBLCompanionApp: App {
         }
         ForEach(CommandableNoiseMode.allCases, id: \.self) { mode in
             Button(mode.displayText) { appDelegate.requestNoiseMode(mode) }
-                .disabled(state.pendingNoiseMode != nil)
+                .disabled(state.pendingNoiseMode != nil || state.raceLinkStatus == .needsPairing)
         }
     }
 }

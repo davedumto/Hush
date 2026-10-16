@@ -6,6 +6,7 @@ import os.log
 protocol BLEBatteryLinkDelegate: AnyObject {
     func bleBatteryLink(_ link: BLEBatteryLink, didUpdateBatteryPercent percent: Int)
     func bleBatteryLink(_ link: BLEBatteryLink, didUpdateNoiseMode mode: NoiseMode)
+    func bleBatteryLink(_ link: BLEBatteryLink, didUpdateRaceLinkStatus status: RaceLinkStatus)
     func bleBatteryLinkDidDisconnect(_ link: BLEBatteryLink)
 }
 
@@ -34,9 +35,21 @@ final class BLEBatteryLink: NSObject {
     private var peripheral: CBPeripheral?
     private var scanTimeoutWorkItem: DispatchWorkItem?
     private var wantsToScan = false
-    private var raceNotifyCharacteristicUUID: CBUUID?
+    private var raceNotifyCharacteristic: CBCharacteristic?
     private var raceWriteCharacteristic: CBCharacteristic?
-    private var isRaceNotifyActive = false
+
+    /// Owns the RACE notify subscription's retry/pairing state machine — see its own doc comment
+    /// for why that logic lives here rather than inline (CoreBluetooth insufficient-encryption
+    /// handling needs to be unit-testable, and this class, which owns real CoreBluetooth objects,
+    /// can't be).
+    private lazy var raceSubscriptionCoordinator: RaceSubscriptionCoordinator = {
+        let coordinator = RaceSubscriptionCoordinator(subscriber: self)
+        coordinator.onStatusChange = { [weak self] status in
+            guard let self else { return }
+            self.delegate?.bleBatteryLink(self, didUpdateRaceLinkStatus: status)
+        }
+        return coordinator
+    }()
 
     /// The most recent readiness tuple actually logged, so `logReadinessIfChanged` only logs on a
     /// real transition instead of on every discovery/notification callback.
@@ -80,9 +93,9 @@ final class BLEBatteryLink: NSObject {
     }
 
     private func resetRaceState() {
-        raceNotifyCharacteristicUUID = nil
+        raceNotifyCharacteristic = nil
         raceWriteCharacteristic = nil
-        isRaceNotifyActive = false
+        raceSubscriptionCoordinator.handleDisconnect()
         logReadinessIfChanged()
     }
 
@@ -158,6 +171,7 @@ extension BLEBatteryLink: CBCentralManagerDelegate {
         MainActor.assumeIsolated {
             peripheral.delegate = self
             logger.info("BLE connected")
+            raceSubscriptionCoordinator.handleConnect()
             logReadinessIfChanged()
             var serviceUUIDs = [profile.batteryServiceUUID, CBUUID(string: "180A")]
             let hasRaceService = profile.raceServiceUUID != nil
@@ -245,8 +259,9 @@ extension BLEBatteryLink: CBPeripheralDelegate {
         }
 
         let notifyCharacteristic = notifyCandidates[0]
-        raceNotifyCharacteristicUUID = notifyCharacteristic.uuid
+        raceNotifyCharacteristic = notifyCharacteristic
         raceWriteCharacteristic = writeCandidates[0]
+        raceSubscriptionCoordinator.handleWriteCharacteristicDiscovered()
         logReadinessIfChanged()
         logger.info("Subscribing to RACE notify characteristic \(notifyCharacteristic.uuid.uuidString, privacy: .public)")
         peripheral.setNotifyValue(true, for: notifyCharacteristic)
@@ -256,11 +271,11 @@ extension BLEBatteryLink: CBPeripheralDelegate {
 
     nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         MainActor.assumeIsolated {
-            guard characteristic.uuid == raceNotifyCharacteristicUUID else { return }
-            isRaceNotifyActive = error == nil && characteristic.isNotifying
+            guard characteristic.uuid == raceNotifyCharacteristic?.uuid else { return }
             logger.info(
-                "RACE notify subscription active=\(self.isRaceNotifyActive, privacy: .public) error=\(error?.localizedDescription ?? "none", privacy: .public)"
+                "RACE notify subscription active=\(characteristic.isNotifying, privacy: .public) error=\(error?.localizedDescription ?? "none", privacy: .public)"
             )
+            raceSubscriptionCoordinator.handleSubscriptionResult(isNotifying: characteristic.isNotifying, error: error)
             logReadinessIfChanged()
         }
     }
@@ -281,7 +296,7 @@ extension BLEBatteryLink: CBPeripheralDelegate {
 
             if characteristic.uuid == profile.batteryLevelUUID {
                 handleBatteryUpdate(data)
-            } else if characteristic.uuid == raceNotifyCharacteristicUUID {
+            } else if characteristic.uuid == raceNotifyCharacteristic?.uuid {
                 handleRaceNotification(data)
             }
         }
@@ -323,7 +338,7 @@ extension BLEBatteryLink: RaceWriteTransport {
     }
 
     var isRaceNotifySubscribed: Bool {
-        isRaceNotifyActive
+        raceSubscriptionCoordinator.isSubscribed
     }
 
     var isReadyForRaceWrites: Bool {
@@ -340,5 +355,32 @@ extension BLEBatteryLink: RaceWriteTransport {
         lastRaceWriteHex = payload.jblHexString
         lastRaceWriteAt = Date()
         return true
+    }
+}
+
+extension BLEBatteryLink: RaceNotifySubscribing {
+    /// Never reads the notify characteristic's value and never writes to it — subscribing is the
+    /// only operation this performs here, exactly as on the initial attempt in
+    /// handleRaceCharacteristics. There is no write-based workaround for an encryption error; the
+    /// only thing that resolves it is the Mac actually pairing/bonding with the headphones.
+    func subscribeToRaceNotify() {
+        guard let peripheral, let raceNotifyCharacteristic else { return }
+        peripheral.setNotifyValue(true, for: raceNotifyCharacteristic)
+    }
+}
+
+extension BLEBatteryLink {
+    /// "domain=... code=... text=..." for the last RACE subscription error, or "none" — for
+    /// "Copy Diagnostics".
+    var lastSubscriptionErrorDescription: String {
+        guard let domain = raceSubscriptionCoordinator.lastErrorDomain,
+              let code = raceSubscriptionCoordinator.lastErrorCode,
+              let text = raceSubscriptionCoordinator.lastErrorText
+        else { return "none" }
+        return "domain=\(domain) code=\(code) text=\(text)"
+    }
+
+    var raceSubscriptionRetryCount: Int {
+        raceSubscriptionCoordinator.retryCount
     }
 }

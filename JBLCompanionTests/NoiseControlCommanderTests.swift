@@ -2,8 +2,11 @@ import CoreBluetooth
 import XCTest
 @testable import JBLCompanion
 
+/// Internal, not private — also reused by RaceSubscriptionCoordinatorTests, which mirrors a
+/// coordinator's `isSubscribed` into one of these to confirm NoiseControlCommander never writes
+/// while the RACE link needs pairing.
 @MainActor
-private final class FakeRaceWriteTransport: RaceWriteTransport {
+final class FakeRaceWriteTransport: RaceWriteTransport {
     /// Independently settable, matching BLEBatteryLink's own three sub-conditions, so tests can
     /// drive connect/subscribe/write-char-discovered/disconnect/reconnect transitions one at a
     /// time instead of only flipping a single combined "ready" bool.

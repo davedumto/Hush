@@ -73,6 +73,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return """
         JBLCompanion diagnostics
         Readiness: connected=\(bleLink.isPeripheralConnected) subscribed=\(bleLink.isRaceNotifySubscribed) writeChar=\(bleLink.raceWriteCharacteristicUUID != nil)
+        RACE link status: \(headphoneState.raceLinkStatus.displayText)
+        Last subscription error: \(bleLink.lastSubscriptionErrorDescription)
+        Subscription retry count: \(bleLink.raceSubscriptionRetryCount)
         Noise mode: \(headphoneState.noiseMode.displayText)
         Pending noise mode: \(headphoneState.pendingNoiseMode?.displayText ?? "none")
         Last RACE notification: \(bleLink.lastRaceNotificationHex ?? "none") at \(dateFormat(bleLink.lastRaceNotificationAt))
@@ -110,6 +113,10 @@ extension AppDelegate: BLEBatteryLinkDelegate {
 
     func bleBatteryLink(_ link: BLEBatteryLink, didUpdateNoiseMode mode: NoiseMode) {
         noiseModeCoordinator.handleConfirmation(mode)
+    }
+
+    func bleBatteryLink(_ link: BLEBatteryLink, didUpdateRaceLinkStatus status: RaceLinkStatus) {
+        headphoneState.raceLinkStatus = status
     }
 
     func bleBatteryLinkDidDisconnect(_ link: BLEBatteryLink) {

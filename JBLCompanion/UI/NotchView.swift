@@ -121,7 +121,7 @@ struct NotchView: View {
             }
             .pickerStyle(.segmented)
             .tint(accent)
-            .disabled(state.pendingNoiseMode != nil)
+            .disabled(state.pendingNoiseMode != nil || state.raceLinkStatus == .needsPairing)
 
             statusCaption
         }
@@ -129,8 +129,8 @@ struct NotchView: View {
 
     @ViewBuilder
     private var statusCaption: some View {
-        switch (state.pendingNoiseMode, state.noiseModeConfirmationTimedOut) {
-        case (.some(let pending), _):
+        switch (state.pendingNoiseMode, state.raceLinkStatus, state.noiseModeConfirmationTimedOut) {
+        case (.some(let pending), _, _):
             HStack(spacing: 5) {
                 ProgressView()
                     .controlSize(.mini)
@@ -139,7 +139,15 @@ struct NotchView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(accent)
             }
-        case (nil, true):
+        case (nil, .needsPairing, _):
+            HStack(alignment: .top, spacing: 5) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 10))
+                Text(RaceLinkStatus.needsPairingMessage)
+                    .font(.system(size: 11))
+            }
+            .foregroundStyle(.orange)
+        case (nil, _, true):
             HStack(spacing: 5) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 10))
@@ -147,7 +155,7 @@ struct NotchView: View {
                     .font(.system(size: 11))
             }
             .foregroundStyle(.orange)
-        case (nil, false):
+        case (nil, _, false):
             Text(state.noiseMode.displayText)
                 .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.5))
