@@ -401,9 +401,17 @@ final class NotchPanel: NSPanel {
     /// Centers the silhouette and the SwiftUI content within the (possibly larger-than-target)
     /// envelope window, both using the same size for now — content stays hidden until the shape
     /// settles (see `revealContent`), so a mid-resize mismatch is never visible.
+    ///
+    /// `silhouette.resize(...)` also sets its own frame to `envelopeSize` while it's actively
+    /// animating, but nothing resets it once the animation finishes and the window shrinks back
+    /// down — without doing it here too, the silhouette view stayed sized to the stale, larger
+    /// envelope while its parent container shrunk around it, so the shape's internal path
+    /// positioning (computed relative to that envelope) ended up off-center in the real window,
+    /// clipping its outline unevenly on one side.
     private func layoutContent(for size: CGSize, envelopeSize: CGSize) {
         guard let container = contentView else { return }
         container.frame = NSRect(origin: .zero, size: envelopeSize)
+        silhouette.frame = NSRect(origin: .zero, size: envelopeSize)
         let origin = CGPoint(x: (envelopeSize.width - size.width) / 2, y: envelopeSize.height - size.height)
         hosting.frame = CGRect(origin: origin, size: size)
     }
