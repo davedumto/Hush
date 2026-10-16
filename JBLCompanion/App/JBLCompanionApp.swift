@@ -65,15 +65,12 @@ struct JBLCompanionApp: App {
         .frame(width: 260)
         .frame(maxHeight: 520)
         .foregroundStyle(.white)
-        .background(Color(red: 0.07, green: 0.07, blue: 0.07))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            // strokeBorder (not stroke) draws entirely inside the shape's bounds — a plain
-            // .stroke() centers on the edge, so half the line falls outside the view and gets
-            // clipped by the window .window style creates for MenuBarExtra, which is invisible.
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(accent.opacity(0.85), lineWidth: 1.5)
-        )
+        // Still .window style underneath (that's what fixes the stepper-closes-on-every-click
+        // issue) but kept close to a native menu's own look — regular material, no accent border;
+        // the orange outline lives on the island's own shape instead, not here.
+        .background(.regularMaterial)
+        .environment(\.colorScheme, .dark)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     @ViewBuilder
