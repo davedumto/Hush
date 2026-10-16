@@ -1,0 +1,26 @@
+{
+  "info": {
+    "author": "xcode",
+    "version": 1
+  },
+  "images": [
+    {
+      "idiom": "universal",
+      "filename": "HushLockup.pdf"
+    },
+    {
+      "idiom": "universal",
+      "filename": "HushLockup-dark.pdf",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    }
+  ],
+  "properties": {
+    "preserves-vector-representation": true,
+    "template-rendering-intent": "original"
+  }
+}
