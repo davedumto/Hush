@@ -273,10 +273,16 @@ final class NotchPanel: NSPanel {
         }
     }
 
+    /// Deliberately does not collapse. design/DESIGN_GUIDE.md §9.5 "Connected to disconnected" is
+    /// a plain crossfade *within* the still-open card, not a forced close — CardConditionResolver
+    /// already resolves `.noDevice` the instant HeadphoneState.connection flips, so ExpandedCard
+    /// (if currently expanded) re-renders itself into the "No headphones" layout on its own; if
+    /// already collapsed, there's nothing to do here at all. Force-collapsing used to snap the
+    /// card shut out from under the user the moment the headphones powered off, instead of letting
+    /// them see the no-device state in place.
     func handleClassicDisconnected() {
         autoCollapseWorkItem?.cancel()
         autoCollapseWorkItem = nil
-        collapse()
     }
 
     // MARK: - Settings changed (size/silhouette/fits/outline/display/edge)
