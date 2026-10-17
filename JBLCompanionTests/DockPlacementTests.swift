@@ -13,7 +13,7 @@ final class DockPlacementTests: XCTestCase {
         let frame = DockPlacement.frame(for: size, edge: .bottom, offset: 0, visibleFrame: visibleFrame, margin: DockPlacement.edgeMargin(for: .bottom))
         XCTAssertEqual(frame.minY, visibleFrame.minY + 12)
         XCTAssertEqual(frame.midX, visibleFrame.midX)
-        XCTAssertEqual(size, CGSize(width: 46, height: 34))
+        XCTAssertEqual(size, CGSize(width: DockPlacement.collapsedPillDiameter, height: DockPlacement.collapsedPillDiameter))
     }
 
     func testLeftPillSitsTenPointsFromTheLeftEdgeVerticallyCentered() {
@@ -21,7 +21,19 @@ final class DockPlacementTests: XCTestCase {
         let frame = DockPlacement.frame(for: size, edge: .left, offset: 0, visibleFrame: visibleFrame, margin: DockPlacement.edgeMargin(for: .left))
         XCTAssertEqual(frame.minX, visibleFrame.minX + 10)
         XCTAssertEqual(frame.midY, visibleFrame.midY)
-        XCTAssertEqual(size, CGSize(width: 34, height: 46))
+        XCTAssertEqual(size, CGSize(width: DockPlacement.collapsedPillDiameter, height: DockPlacement.collapsedPillDiameter))
+    }
+
+    func testCollapsedPillIsTheSameCircularSizeOnEveryEdge() {
+        // A circle, deliberately deviating from the guide's own elongated 46x34/34x46 pill (see
+        // CollapsedPill's own doc comment / CLAUDE.md) — there's no long axis left to vary by
+        // edge, which is also what fixed the old flex/stack background mismatch when switching
+        // between a horizontal and a vertical dock.
+        let sizes = DockEdge.allCases.map { DockPlacement.collapsedPillSize(for: $0) }
+        for size in sizes {
+            XCTAssertEqual(size.width, size.height)
+            XCTAssertEqual(size, sizes[0])
+        }
     }
 
     func testRightPillMirrorsLeft() {

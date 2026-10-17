@@ -1,13 +1,14 @@
 import SwiftUI
 
-/// The collapsed pill shown when the card isn't expanded — design/DESIGN_GUIDE.md §3. Purely a
-/// function of `variant` (PillVariant.resolve) plus local hover state for the scale-up spring;
-/// never branches on raw profile/connection/battery facts itself.
+/// The collapsed pill shown when the card isn't expanded — a circle, deliberately deviating from
+/// design/DESIGN_GUIDE.md §3's own elongated 46x34/34x46 pill (CLAUDE.md records this deviation).
+/// Purely a function of `variant` (PillVariant.resolve) plus local hover state for the scale-up
+/// spring; never branches on raw profile/connection/battery facts itself.
 ///
-/// Renders at the guide's own fixed size (46x34, or 34x46 for a vertical dock) regardless of
-/// whatever frame it's placed in — NotchView centers it inside `collapsedSize`, the surrounding
+/// Renders at a fixed size (DockPlacement.collapsedPillDiameter, the same on every edge) regardless
+/// of whatever frame it's placed in — NotchView centers it inside `collapsedSize`, the surrounding
 /// app's own adaptive capsule/notch sizing (IslandGeometry), which doesn't currently always equal
-/// 46x34 on every display. The pill's own shape/fill/border/shadow are self-drawn (unlike
+/// that diameter on every display. The pill's own shape/fill/border/shadow are self-drawn (unlike
 /// NotchView's other content, which never draws its own background — see its doc comment): the
 /// native NotchSilhouetteView underneath is a fixed, always-black fill with no theme awareness, so
 /// it can't produce the light theme's white pill or the per-condition border/glow on its own.
@@ -26,11 +27,9 @@ struct CollapsedPill: View {
     @State private var lowBatteryPulse = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var isVertical: Bool { variant.dock.isVertical }
     private var size: CGSize {
-        isVertical ? CGSize(width: 34, height: 46) : CGSize(width: 46, height: 34)
+        CGSize(width: DockPlacement.collapsedPillDiameter, height: DockPlacement.collapsedPillDiameter)
     }
-    private var cornerRadius: CGFloat { min(size.width, size.height) / 2 }
     private var isLowBattery: Bool {
         if case .bar(_, let isLow) = variant.battery { return isLow }
         return false
@@ -61,30 +60,15 @@ struct CollapsedPill: View {
         let fillColor = variant.dock.isNotch ? Theme.Brand.black : Theme.Semantic.pillBackground
         let borderColor = variant.theme == .dark ? Color.white.opacity(0.16) : Theme.Brand.deepNavy.opacity(0.08)
 
-        Group {
-            if variant.dock.isNotch {
-                // §3: "Square top corners, 17 radius bottom corners."
-                UnevenRoundedRectangle(
-                    topLeadingRadius: 0, bottomLeadingRadius: cornerRadius,
-                    bottomTrailingRadius: cornerRadius, topTrailingRadius: 0, style: .continuous
-                )
-                .fill(fillColor)
-                .overlay(
-                    UnevenRoundedRectangle(
-                        topLeadingRadius: 0, bottomLeadingRadius: cornerRadius,
-                        bottomTrailingRadius: cornerRadius, topTrailingRadius: 0, style: .continuous
-                    )
-                    .strokeBorder(isLowBattery ? Theme.Brand.orange : borderColor, lineWidth: isLowBattery ? 1.5 : 1)
-                )
-            } else {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(fillColor)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .strokeBorder(isLowBattery ? Theme.Brand.orange : borderColor, lineWidth: isLowBattery ? 1.5 : 1)
-                    )
-            }
-        }
+        // A plain circle, the same for every dock including the notch-fused one — no more of §3's
+        // "square top corners" distinction (that was specifically to read as flush with a
+        // rectangular camera housing from above; a circle has no "top corners" to square off, and
+        // deliberately isn't trying to trace the camera housing's own outline anymore).
+        Circle()
+            .fill(fillColor)
+            .overlay(
+                Circle().strokeBorder(isLowBattery ? Theme.Brand.orange : borderColor, lineWidth: isLowBattery ? 1.5 : 1)
+            )
         // Base resting shadow (§3): y10 blur24 spread-8, approximated — SwiftUI's .shadow has no
         // spread term, so "spread" is folded into radius/opacity rather than modeled exactly.
         .shadow(
@@ -105,10 +89,10 @@ struct CollapsedPill: View {
     private var contentView: some View {
         if variant.photo == .noDevice {
             markView(dotOpacity: 0.4)
-        } else if isVertical {
-            VStack(spacing: 4) { primaryVisual; batteryIndicator }
         } else {
-            HStack(spacing: 5) { primaryVisual; batteryIndicator }
+            // One layout for every dock now that the pill itself is a circle with no long axis —
+            // icon above the battery indicator, same as the old vertical-dock arrangement.
+            VStack(spacing: 4) { primaryVisual; batteryIndicator }
         }
     }
 
@@ -119,7 +103,7 @@ struct CollapsedPill: View {
             Image(assetName)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(height: isVertical ? 22 : 26)
+                .frame(height: 26)
                 .opacity(variant.photoOpacity)
                 .saturation(variant.photoOpacity < 1 ? 0 : 1) // connecting: desaturated, not just faded
                 // §9.1 point 5: flies/grows into ExpandedCard's hero photo on expand — see that
@@ -180,17 +164,16 @@ struct CollapsedPill: View {
 
     private func barView(percent: Int, isLow: Bool) -> some View {
         let fraction = max(0, min(1, Double(percent) / 100))
-        let trackSize: CGSize = isVertical ? CGSize(width: 16, height: 3) : CGSize(width: 3, height: 14)
+        // One horizontal track for every dock, under the icon in the VStack above — same reason
+        // `contentView` dropped its own isVertical branch.
+        let trackSize = CGSize(width: 22, height: 3)
 
-        return ZStack(alignment: isVertical ? .leading : .bottom) {
+        return ZStack(alignment: .leading) {
             RoundedRectangle(cornerRadius: 2, style: .continuous)
                 .fill(Color.white.opacity(0.35)) // track: "grey at 35%"
             RoundedRectangle(cornerRadius: 2, style: .continuous)
                 .fill(Theme.Brand.orange)
-                .frame(
-                    width: isVertical ? trackSize.width * fraction : trackSize.width,
-                    height: isVertical ? trackSize.height : trackSize.height * fraction
-                )
+                .frame(width: trackSize.width * fraction, height: trackSize.height)
         }
         .frame(width: trackSize.width, height: trackSize.height)
         // §9.4: "Low battery pill bar | Opacity 0.3 to 1, 1.2 s cycle, forever." §9.6: not in the
