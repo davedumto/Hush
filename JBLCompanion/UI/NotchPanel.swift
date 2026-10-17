@@ -627,6 +627,16 @@ final class NotchPanel: NSPanel {
         // swing, and only settle down to the true small target in the completion handler below.
         let contentLayoutSize = MotionConstants.windowResizeOrdering(forExpanding: expanded) == .growBeforeAnimating ? target : start
         layoutContent(for: contentLayoutSize, envelopeSize: envelope)
+        // Forces AppKit to resolve that frame change — and SwiftUI's own layout pass inside
+        // `hosting` to catch up with it — synchronously, right now, rather than on whatever the
+        // next display-link callback happens to be. Without this, the brand-new view NotchView's
+        // transition is about to insert (ExpandedCard on an expand, CollapsedPill on a collapse)
+        // could render its first frame or two against the *previous* (smaller, pre-swing) hosting
+        // geometry: GeometryReader-based layout (ExpandedCard's own hero section positions its
+        // children off `geo.size`) degenerates toward the corner when the space it measures is
+        // still the old, much smaller one, which is exactly what read as content "arriving from
+        // the top-left" before snapping to its real position a frame later.
+        hosting.layoutSubtreeIfNeeded()
 
         // The capsule's rounded-pill shape only ever belongs to the small collapsed indicator —
         // the wide expanded card is always a plain rounded rectangle (gap nil), regardless of
