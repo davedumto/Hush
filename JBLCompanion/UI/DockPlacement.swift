@@ -15,12 +15,24 @@ enum DockEdge: String, CaseIterable, Codable, Equatable {
 /// uniformly to all four). Every function takes screen/visible frames as plain CGRects — no
 /// NSScreen dependency, so this is fully unit-testable without a real display.
 enum DockPlacement {
-    /// §6 "10 from the edge" (left/right) / "12 above the bottom, or above the Dock" (bottom) —
-    /// the same margin the pill and the card both anchor to on these three edges (the card simply
-    /// being much bigger is what makes it "grow away from the edge").
+    /// The default distance from the edge the pill/card dock to (§6 originally specified "10 from
+    /// the edge" for left/right, "12" for bottom) — user-adjustable now
+    /// (IslandSettings.edgeMargin(for:)), same margin for every edge including top
+    /// (IslandGeometry's own `topMargin`). §6's own smaller numbers turned out not to be just a
+    /// cosmetic choice: on hover, CollapsedPill scales up (MotionConstants.pillHoverScale, 1.06)
+    /// and its shadow/glow can bleed up to ~13pt (the notch glow's own blur radius) — at the
+    /// guide's original 10/12, that growth, right on the docked edge where there's zero window
+    /// envelope margin by design (restingEnvelopeSize's own doc comment), clipped flat against the
+    /// window's own hard edge on hover. 20 clears that with real room to spare at every pill size.
     static func edgeMargin(for edge: DockEdge) -> CGFloat {
-        edge == .bottom ? 12 : 10
+        _ = edge
+        return 20
     }
+
+    /// A floor that clears hover-scale + shadow bleed at the largest pill size (see `edgeMargin`'s
+    /// own doc comment for the arithmetic) on every edge, not just a tight range around the
+    /// default — a user-chosen margin below this would reintroduce that same hover clipping.
+    static let edgeMarginRange: ClosedRange<CGFloat> = 20...80
 
     /// CollapsedPill's own default diameter — a circle, the same size on every edge, deliberately
     /// deviating from design/DESIGN_GUIDE.md §3's own elongated 46x34/34x46 pill (CLAUDE.md

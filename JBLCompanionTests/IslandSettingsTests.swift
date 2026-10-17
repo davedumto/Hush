@@ -65,6 +65,54 @@ final class IslandSettingsTests: XCTestCase {
         XCTAssertEqual(IslandSettings.dockOffset(forDisplayUUID: uuid, edge: .left), -30)
     }
 
+    // MARK: - Pill diameter
+
+    func testPillDiameterDefaultsToDockPlacementsOwnDefaultWhenUnset() {
+        UserDefaults.standard.removeObject(forKey: IslandSettings.Key.pillDiameter)
+        XCTAssertEqual(IslandSettings.pillDiameter, DockPlacement.collapsedPillDiameter)
+    }
+
+    func testPillDiameterRoundTrips() {
+        IslandSettings.pillDiameter = 72
+        XCTAssertEqual(IslandSettings.pillDiameter, 72)
+        UserDefaults.standard.removeObject(forKey: IslandSettings.Key.pillDiameter)
+    }
+
+    func testPillDiameterClampsToItsRange() {
+        IslandSettings.pillDiameter = 1000
+        XCTAssertEqual(IslandSettings.pillDiameter, DockPlacement.pillDiameterRange.upperBound)
+        UserDefaults.standard.removeObject(forKey: IslandSettings.Key.pillDiameter)
+    }
+
+    // MARK: - Edge margin ("distance from the edge")
+
+    func testEdgeMarginDefaultsToDockPlacementsOwnDefaultWhenUnset() {
+        UserDefaults.standard.removeObject(forKey: IslandSettings.Key.edgeMargin(for: .top))
+        XCTAssertEqual(IslandSettings.edgeMargin(for: .top), DockPlacement.edgeMargin(for: .top))
+    }
+
+    func testEdgeMarginRoundTrips() {
+        IslandSettings.setEdgeMargin(35, for: .left)
+        XCTAssertEqual(IslandSettings.edgeMargin(for: .left), 35)
+        UserDefaults.standard.removeObject(forKey: IslandSettings.Key.edgeMargin(for: .left))
+    }
+
+    func testEdgeMarginClampsToItsRange() {
+        IslandSettings.setEdgeMargin(1000, for: .bottom)
+        XCTAssertEqual(IslandSettings.edgeMargin(for: .bottom), DockPlacement.edgeMarginRange.upperBound)
+        UserDefaults.standard.removeObject(forKey: IslandSettings.Key.edgeMargin(for: .bottom))
+    }
+
+    /// The whole point of keying by edge: setting one edge's margin must never bleed into another.
+    func testEdgeMarginIsIndependentPerEdge() {
+        IslandSettings.setEdgeMargin(25, for: .top)
+        IslandSettings.setEdgeMargin(45, for: .right)
+        XCTAssertEqual(IslandSettings.edgeMargin(for: .top), 25)
+        XCTAssertEqual(IslandSettings.edgeMargin(for: .right), 45)
+        UserDefaults.standard.removeObject(forKey: IslandSettings.Key.edgeMargin(for: .top))
+        UserDefaults.standard.removeObject(forKey: IslandSettings.Key.edgeMargin(for: .right))
+    }
+
     // MARK: - Auto-expand on connect
 
     func testAutoExpandOnConnectDefaultsToOff() {

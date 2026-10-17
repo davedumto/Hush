@@ -50,16 +50,19 @@ struct IslandGeometry: Equatable {
     /// and shaped by NotchPanel.collapsedSize(for:geometry:)/DockPlacement, not by this geometry
     /// at all; `floatingGap`/`floatingDrop` here only still matter for a real notch's own frame.
     let floatingGap: CGFloat?
-    /// A few points, never 0 — keeps the window's own top edge from landing exactly on the
-    /// screen's physical top edge. Flush against it clipped the collapsed pill's rounded top
-    /// corner outright (no sub-pixel room for the circle's own antialiasing to resolve into,
-    /// since a window can't render past the screen's own bounds) — a flat "chip" across the top
-    /// of what should be a full circle, only ever visible on the top dock for exactly that reason.
+    /// User-adjustable (IslandSettings.edgeMargin(for: .top)), never below
+    /// DockPlacement.edgeMarginRange's own floor — keeps the window's own top edge from landing
+    /// too close to the screen's physical top edge. Flush against it (or hovering, which scales
+    /// the pill up and grows its shadow/glow — MotionConstants.pillHoverScale) clipped the
+    /// collapsed pill's rounded top corner outright (no sub-pixel room for antialiasing/shadow
+    /// bleed to resolve into, since a window can't render past the screen's own bounds) — a flat
+    /// "chip" across the top of what should be a full circle, only ever visible on the top dock
+    /// for exactly that reason. 0 for a real camera notch regardless — it always hangs flush.
     let floatingDrop: CGFloat
 
     init(
         screen: CGRect, safeAreaTop: CGFloat, cameraWidth rawCameraWidth: CGFloat,
-        menuBarHeight rawMenuBarHeight: CGFloat = 24
+        menuBarHeight rawMenuBarHeight: CGFloat = 24, topMargin: CGFloat = DockPlacement.edgeMargin(for: .top)
     ) {
         self.screen = screen
 
@@ -69,7 +72,7 @@ struct IslandGeometry: Equatable {
         // A real camera always hangs the island flush from the top edge, sized to its own
         // housing. Every other case floats instead, regardless of edge.
         floatingGap = isNotched ? nil : max(4, (barHeight * 0.18).rounded())
-        floatingDrop = isNotched ? 0 : 4
+        floatingDrop = isNotched ? 0 : min(DockPlacement.edgeMarginRange.upperBound, max(DockPlacement.edgeMarginRange.lowerBound, topMargin))
 
         // Only the real-camera case is ever actually read by the live app (NotchPanel reads
         // DockPlacement's own fixed circle size for every other case) — kept correct for that one

@@ -11,15 +11,15 @@ final class DockPlacementTests: XCTestCase {
     func testBottomPillSitsAboveTheVisibleFrameBottom() {
         let size = DockPlacement.collapsedPillSize(for: .bottom, diameter: DockPlacement.collapsedPillDiameter)
         let frame = DockPlacement.frame(for: size, edge: .bottom, offset: 0, visibleFrame: visibleFrame, margin: DockPlacement.edgeMargin(for: .bottom))
-        XCTAssertEqual(frame.minY, visibleFrame.minY + 12)
+        XCTAssertEqual(frame.minY, visibleFrame.minY + DockPlacement.edgeMargin(for: .bottom))
         XCTAssertEqual(frame.midX, visibleFrame.midX)
         XCTAssertEqual(size, CGSize(width: DockPlacement.collapsedPillDiameter, height: DockPlacement.collapsedPillDiameter))
     }
 
-    func testLeftPillSitsTenPointsFromTheLeftEdgeVerticallyCentered() {
+    func testLeftPillSitsAtTheDefaultMarginFromTheLeftEdgeVerticallyCentered() {
         let size = DockPlacement.collapsedPillSize(for: .left, diameter: DockPlacement.collapsedPillDiameter)
         let frame = DockPlacement.frame(for: size, edge: .left, offset: 0, visibleFrame: visibleFrame, margin: DockPlacement.edgeMargin(for: .left))
-        XCTAssertEqual(frame.minX, visibleFrame.minX + 10)
+        XCTAssertEqual(frame.minX, visibleFrame.minX + DockPlacement.edgeMargin(for: .left))
         XCTAssertEqual(frame.midY, visibleFrame.midY)
         XCTAssertEqual(size, CGSize(width: DockPlacement.collapsedPillDiameter, height: DockPlacement.collapsedPillDiameter))
     }
@@ -39,7 +39,7 @@ final class DockPlacementTests: XCTestCase {
     func testRightPillMirrorsLeft() {
         let size = DockPlacement.collapsedPillSize(for: .right, diameter: DockPlacement.collapsedPillDiameter)
         let frame = DockPlacement.frame(for: size, edge: .right, offset: 0, visibleFrame: visibleFrame, margin: DockPlacement.edgeMargin(for: .right))
-        XCTAssertEqual(frame.maxX, visibleFrame.maxX - 10)
+        XCTAssertEqual(frame.maxX, visibleFrame.maxX - DockPlacement.edgeMargin(for: .right))
         XCTAssertEqual(frame.midY, visibleFrame.midY)
     }
 

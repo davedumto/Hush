@@ -69,6 +69,24 @@ final class IslandGeometryTests: XCTestCase {
         XCTAssertLessThan(frame.maxY, screen.maxY)
     }
 
+    func testTopMarginIsUserAdjustable() {
+        let geometry = IslandGeometry(screen: screen, safeAreaTop: 0, cameraWidth: 0, topMargin: 40)
+        XCTAssertEqual(geometry.floatingDrop, 40)
+    }
+
+    func testTopMarginIsClampedToDockPlacementsOwnRange() {
+        let tooSmall = IslandGeometry(screen: screen, safeAreaTop: 0, cameraWidth: 0, topMargin: 0)
+        let tooBig = IslandGeometry(screen: screen, safeAreaTop: 0, cameraWidth: 0, topMargin: 1000)
+        XCTAssertEqual(tooSmall.floatingDrop, DockPlacement.edgeMarginRange.lowerBound)
+        XCTAssertEqual(tooBig.floatingDrop, DockPlacement.edgeMarginRange.upperBound)
+    }
+
+    func testTopMarginIsIgnoredForARealCameraNotch() {
+        // A real camera always hangs flush (floatingDrop 0), regardless of what topMargin asks for.
+        let geometry = IslandGeometry(screen: screen, safeAreaTop: 32, cameraWidth: 200, topMargin: 40)
+        XCTAssertEqual(geometry.floatingDrop, 0)
+    }
+
     // MARK: - MenuBarMeasurements
 
     func testShowsBarDetectsGapWithinRange() {

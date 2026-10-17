@@ -276,7 +276,12 @@ final class NotchPanel: NSPanel {
     var currentEdge: DockEdge { edge }
 
     func settingsDidChange() {
-        reposition()
+        // Forced, not a plain reposition(): a margin change on bottom/left/right isn't visible to
+        // reposition()'s own "did anything actually change" guard at all — IslandSettings.edgeMargin
+        // is read live inside windowFrame(for:), not stored on `geometry`/`currentSize`, the only
+        // two things that guard compares. Without forcing it, that guard saw no difference and
+        // bailed out before ever calling presentImmediately(), so the window silently never moved.
+        reposition(force: true)
     }
 
     /// Island Settings' edge picker calls this directly (not through `settingsDidChange()`,
@@ -466,7 +471,7 @@ final class NotchPanel: NSPanel {
         reposition()
     }
 
-    func reposition() {
+    func reposition(force: Bool = false) {
         let resolution = Self.resolveScreen()
         Self.logDisplayResolution(resolution, logger: logger)
         guard let screen = resolution.screen else {
@@ -488,7 +493,7 @@ final class NotchPanel: NSPanel {
         }
 
         let nextCollapsedSize = Self.collapsedSize(for: edge, geometry: next)
-        guard next != geometry || visibleFrame != nextVisibleFrame
+        guard force || next != geometry || visibleFrame != nextVisibleFrame
             || currentSize != (uiState.isExpanded ? Self.expandedSize(for: edge, geometry: next) : nextCollapsedSize)
         else { return }
 
@@ -572,7 +577,7 @@ final class NotchPanel: NSPanel {
         )
         return IslandGeometry(
             screen: screen.frame, safeAreaTop: screen.safeAreaInsets.top, cameraWidth: cameraWidth,
-            menuBarHeight: menuBarHeight
+            menuBarHeight: menuBarHeight, topMargin: IslandSettings.edgeMargin(for: .top)
         )
     }
 
@@ -615,7 +620,7 @@ final class NotchPanel: NSPanel {
             frame.origin.x += offset
             return frame
         case .bottom, .left, .right:
-            return DockPlacement.frame(for: size, edge: edge, offset: offset, visibleFrame: visibleFrame, margin: DockPlacement.edgeMargin(for: edge))
+            return DockPlacement.frame(for: size, edge: edge, offset: offset, visibleFrame: visibleFrame, margin: IslandSettings.edgeMargin(for: edge))
         }
     }
 

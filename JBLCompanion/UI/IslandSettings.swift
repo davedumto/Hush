@@ -10,6 +10,9 @@ enum IslandSettings {
         static let pillDiameter = "islandPillDiameter"
         static let chosenDisplayUUID = "islandChosenDisplayUUID"
         static let autoExpandOnConnect = "islandAutoExpandOnConnect"
+        /// One key per edge (not per display, unlike dockEdge/dockOffset below) — a "how far from
+        /// the top" preference is about the edge itself, not which physical display it's on.
+        static func edgeMargin(for edge: DockEdge) -> String { "islandEdgeMargin.\(edge.rawValue)" }
         /// Per-display edge is stored under one key per display UUID, not a single shared key —
         /// design/DESIGN_GUIDE.md §6: "save edge and offset per display."
         static func dockEdge(forDisplayUUID uuid: String) -> String { "islandDockEdge.\(uuid)" }
@@ -30,6 +33,19 @@ enum IslandSettings {
             return min(DockPlacement.pillDiameterRange.upperBound, max(DockPlacement.pillDiameterRange.lowerBound, stored))
         }
         set { UserDefaults.standard.set(Double(newValue), forKey: Key.pillDiameter) }
+    }
+
+    /// How far the island sits from `edge` — top/bottom/left/right each keep their own value. 0
+    /// (UserDefaults' default for an unset key) falls back to DockPlacement's own default rather
+    /// than clamping down to the range's floor, same reasoning as `pillDiameter` above.
+    static func edgeMargin(for edge: DockEdge) -> CGFloat {
+        let stored = UserDefaults.standard.double(forKey: Key.edgeMargin(for: edge))
+        guard stored != 0 else { return DockPlacement.edgeMargin(for: edge) }
+        return min(DockPlacement.edgeMarginRange.upperBound, max(DockPlacement.edgeMarginRange.lowerBound, stored))
+    }
+
+    static func setEdgeMargin(_ margin: CGFloat, for edge: DockEdge) {
+        UserDefaults.standard.set(Double(margin), forKey: Key.edgeMargin(for: edge))
     }
 
     /// nil means "automatic" — the display currently hosting the menu bar.

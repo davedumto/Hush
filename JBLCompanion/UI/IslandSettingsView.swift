@@ -25,6 +25,11 @@ struct IslandSettingsView: View {
     /// this just mirrors whichever display is currently active, seeded on appear and pushed back
     /// through AppDelegate.setDockEdge on change (which both applies it live and persists it).
     @State private var selectedEdge: DockEdge = .top
+    /// Same reasoning as `selectedEdge` — IslandSettings.edgeMargin(for:) is keyed per edge, not
+    /// one fixed @AppStorage key, so this mirrors whichever edge is currently selected above:
+    /// reseeded every time `selectedEdge` changes, pushed back through
+    /// IslandSettings.setEdgeMargin(_:for:) on its own change.
+    @State private var edgeMargin: Double = Double(DockPlacement.edgeMargin(for: .top))
 
     var body: some View {
         Form {
@@ -46,6 +51,10 @@ struct IslandSettingsView: View {
                     Text("Left").tag(DockEdge.left)
                     Text("Right").tag(DockEdge.right)
                 }
+                Stepper(
+                    "Distance from \(selectedEdge.rawValue): \(Int(edgeMargin))pt", value: $edgeMargin,
+                    in: Double(DockPlacement.edgeMarginRange.lowerBound)...Double(DockPlacement.edgeMarginRange.upperBound), step: 4
+                )
             }
 
             Section("Display") {
@@ -60,8 +69,19 @@ struct IslandSettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 360)
-        .onAppear { selectedEdge = appDelegate.currentDockEdge }
-        .onChange(of: selectedEdge) { _, newEdge in appDelegate.setDockEdge(newEdge) }
+        .onAppear {
+            selectedEdge = appDelegate.currentDockEdge
+            edgeMargin = Double(IslandSettings.edgeMargin(for: selectedEdge))
+        }
+        .onChange(of: selectedEdge) { _, newEdge in
+            appDelegate.setDockEdge(newEdge)
+            // Show *that* edge's own saved margin, not whatever the previous edge's was.
+            edgeMargin = Double(IslandSettings.edgeMargin(for: newEdge))
+        }
+        .onChange(of: edgeMargin) { _, newValue in
+            IslandSettings.setEdgeMargin(CGFloat(newValue), for: selectedEdge)
+            appDelegate.notchSettingsDidChange()
+        }
         .onChange(of: pillDiameter) { _, _ in appDelegate.notchSettingsDidChange() }
         .onChange(of: chosenDisplayUUID) { _, _ in appDelegate.notchSettingsDidChange() }
     }

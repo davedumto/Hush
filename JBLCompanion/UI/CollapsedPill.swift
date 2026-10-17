@@ -64,8 +64,11 @@ struct CollapsedPill: View {
     private var shape: some View {
         let fillColor = variant.dock.isNotch ? Theme.Brand.black : Theme.Semantic.pillBackground
         // Orange at every battery level now, not just low — low battery still reads as distinct
-        // via full opacity and a thicker stroke rather than a different color entirely.
-        let borderColor = Theme.Brand.orange.opacity(0.5)
+        // via full opacity and a thicker stroke rather than a different color entirely. Light
+        // theme needs far more opacity than dark to read as the same color at all: the same 0.5
+        // that's clearly orange against a near-black fill washed out to barely-there against the
+        // light pill background and the owner reported it as not visible.
+        let borderColor = Theme.Brand.orange.opacity(variant.theme == .dark ? 0.5 : 0.9)
 
         // A plain circle, the same for every dock including the notch-fused one — no more of §3's
         // "square top corners" distinction (that was specifically to read as flush with a
