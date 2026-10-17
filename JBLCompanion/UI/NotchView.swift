@@ -187,8 +187,23 @@ struct NotchView: View {
     @ViewBuilder
     private var collapsedContent: some View {
         let size = collapsedSize()
-        CollapsedPill(variant: pillVariant, photoNamespace: photoFlight)
+        CollapsedPill(variant: pillVariant, photoNamespace: pillPhotoNamespace)
             .frame(width: size.width, height: size.height)
+    }
+
+    /// The pill is always mounted (see the body's own doc comment on why), so without this gate
+    /// it would share `photoFlight`'s matchedGeometryEffect id with ExpandedCard's hero photo for
+    /// the *entire* time both happen to be in the tree — not just during the actual flight.
+    /// `NotchUIState.geometryVersion`'s own doc comment describes exactly the case that broke:
+    /// switching dock edges while already expanded re-lays-out this still-mounted (just invisible)
+    /// pill at the new edge's position, and with both views sharing one matchedGeometryEffect id
+    /// at that moment, SwiftUI snapped the already-settled card's photo down to the pill's small,
+    /// edge-anchored frame — the photo either vanished (clipped inside the card at top/bottom) or
+    /// showed as a stray sliver at the screen edge (left/right). Only share the id while a flight
+    /// could actually be happening (`isAnimating` covers the whole expand/collapse swing, per
+    /// `NotchPanel.present()`), so a later geometry-only change can't re-sync it once settled.
+    private var pillPhotoNamespace: Namespace.ID? {
+        uiState.isAnimating ? photoFlight : nil
     }
 
     /// design/DESIGN_GUIDE.md §5 "Connecting": the classic link is up but no status event has
