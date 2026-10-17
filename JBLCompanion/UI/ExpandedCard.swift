@@ -37,6 +37,14 @@ struct ExpandedCard<ModeControls: View>: View {
             tab
         }
         .frame(width: cardSize.width, height: cardSize.height)
+        // Without this, a click on any part of the card with no SwiftUI gesture of its own (the
+        // frame fill, the panel gradient, empty hero space) falls straight through the hosting
+        // view to the native NotchSilhouetteView underneath, whose own mouseDown/mouseUp treats
+        // any click inside its shape as a tap-to-toggle — collapsing the card immediately, then
+        // the still-hovering mouse re-triggers the hover-open timer, so it reopens right after.
+        // This absorbs those clicks (doing nothing) so only the tab and the real buttons respond.
+        .contentShape(Rectangle())
+        .onTapGesture {}
     }
 
     // MARK: - Frame + panel
@@ -47,6 +55,14 @@ struct ExpandedCard<ModeControls: View>: View {
             .shadow(
                 color: colorScheme == .dark ? .clear : Theme.Brand.black.opacity(0.6),
                 radius: 30, x: 0, y: 30
+            )
+            // The brand-accent edge: drawn here, not left to NotchSilhouetteView's own native
+            // edgeLayer (which strokes the identical path underneath) — this card frame is fully
+            // opaque and sits on top of it in z-order, so the native stroke stays mostly hidden
+            // once real content is showing. Drawing it again here keeps it visible while open.
+            .overlay(
+                RoundedRectangle(cornerRadius: 33, style: .continuous)
+                    .strokeBorder(Theme.Brand.orange.opacity(0.9), lineWidth: 1.5)
             )
     }
 
@@ -365,7 +381,10 @@ struct ExpandedCard<ModeControls: View>: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 15, style: .continuous)
-                .strokeBorder(isLow ? Theme.Brand.orange : Theme.Semantic.glassStroke, lineWidth: 1)
+                // Light theme specifically: an orange edge separates the chip from the hero number
+                // sitting behind/near it, which is also light/white there (same "white-on-white"
+                // issue the number's own drop shadow addresses for the photo).
+                .strokeBorder(isLow || colorScheme == .light ? Theme.Brand.orange : Theme.Semantic.glassStroke, lineWidth: 1)
         )
         .shadow(color: isLow ? Theme.Brand.orange.opacity(lowBatteryPulse ? 0.5 : 0) : .clear, radius: 11)
         .onAppear {

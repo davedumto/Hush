@@ -32,6 +32,9 @@ final class NotchSilhouetteView: NSView {
         layer?.masksToBounds = true
         shapeLayer.fillColor = NSColor.black.cgColor
         layer?.addSublayer(shapeLayer)
+        // Default is black because that was the only color this silhouette ever needed before the
+        // hush. restyle, which made both the pill and the card's own frame theme-aware (white in
+        // light, black in dark) — see `setFillColor`.
 
         edgeLayer.fillColor = nil
         edgeLayer.strokeColor = NSColor(calibratedRed: 1.0, green: 0.45, blue: 0.05, alpha: 0.9).cgColor
@@ -61,6 +64,19 @@ final class NotchSilhouetteView: NSView {
         let local = convert(point, from: superview)
         guard let path = shapeLayer.path, path.contains(local) else { return nil }
         return self
+    }
+
+    /// Set before a resize/reveal, never mid-animation — this native fill is what's actually
+    /// visible for most of the pill->card swing, since the SwiftUI content stays hidden
+    /// (`revealContent`) until the shape settles. Without matching it to the real theme ahead of
+    /// time, light theme's white card used to visibly flash black first (the stale default),
+    /// then "transition" to white once the SwiftUI content faded in.
+    func setFillColor(_ color: NSColor) {
+        guard shapeLayer.fillColor != color.cgColor else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        shapeLayer.fillColor = color.cgColor
+        CATransaction.commit()
     }
 
     override func mouseDown(with event: NSEvent) {

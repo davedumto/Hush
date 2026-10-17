@@ -146,6 +146,7 @@ final class NotchPanel: NSPanel {
         silhouette.onHoverChange = { [weak self] hovering in self?.handleHover(hovering) }
 
         layoutContent(for: initialGeometry.collapsedSize, envelopeSize: initialEnvelope)
+        silhouette.setFillColor(currentSilhouetteFillColor())
         // Give the silhouette an initial path immediately — otherwise it stays empty (zero
         // frame) until the first expand/collapse transition ever runs.
         silhouette.resize(
@@ -170,6 +171,15 @@ final class NotchPanel: NSPanel {
     deinit {
         if let globalMouseMonitor { NSEvent.removeMonitor(globalMouseMonitor) }
         screenEdgeMonitors.forEach(NSEvent.removeMonitor)
+    }
+
+    /// The pill/card's own fill (Theme.Semantic.pillBackground / cardFrame: white in light theme,
+    /// black in dark) mirrored for the native silhouette, which has no SwiftUI/asset-catalog
+    /// access of its own — set right before every resize so the native layer never shows the
+    /// stale default while the SwiftUI content is still hidden mid-animation.
+    private func currentSilhouetteFillColor() -> NSColor {
+        if isNotched { return .black }
+        return effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .black : .white
     }
 
     // MARK: - Visibility
@@ -451,6 +461,10 @@ final class NotchPanel: NSPanel {
 
         contentRevealWorkItem?.cancel()
         hosting.alphaValue = 0
+        // Set before the swing starts, not after: the native fill is what's actually on screen
+        // for most of the animation (SwiftUI content stays hidden until revealContent), so it
+        // has to already be correct, not just end up correct once the real content fades in.
+        silhouette.setFillColor(currentSilhouetteFillColor())
 
         // 1. Make the window big enough for the whole swing, then center both views within it.
         setFrame(geometry.frame(for: envelope), display: true)
