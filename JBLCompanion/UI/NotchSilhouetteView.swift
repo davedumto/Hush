@@ -19,6 +19,18 @@ final class NotchSilhouetteView: NSView {
 
     var onTap: (() -> Void)?
     var onHoverChange: ((Bool) -> Void)?
+    /// design/DESIGN_GUIDE.md §6: "the pill can be dragged along its edge only" — reports the
+    /// incremental delta (not cumulative from the original mouseDown) along whichever axis
+    /// `dockEdge` implies, so the panel can just add it straight onto its current offset. Only
+    /// fires once the move exceeds DockPlacement.dragThreshold ("a click that moves less than a
+    /// few points is a click, not a drag") — before that, this stays silent and `onTap` still
+    /// fires normally on mouseUp.
+    var onDrag: ((CGFloat) -> Void)?
+    /// Which axis `onDrag` reports deltas along — set by the caller whenever the dock edge
+    /// changes. Defaults to `.top` (horizontal), matching this view's original top-only behavior.
+    var dockEdge: DockEdge = .top
+    private var dragAnchor: CGPoint?
+    private var didDrag = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -81,17 +93,32 @@ final class NotchSilhouetteView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         pressedInside = true
+        dragAnchor = event.locationInWindow
+        didDrag = false
     }
 
     override func mouseDragged(with event: NSEvent) {
         // A press that moves without leaving the shape does not cancel the click; only leaving it does.
         let point = convert(event.locationInWindow, from: nil)
         pressedInside = shapeLayer.path?.contains(point) ?? false
+
+        guard let anchor = dragAnchor else { return }
+        let current = event.locationInWindow
+        if !didDrag {
+            guard DockPlacement.isDrag(from: anchor, to: current) else { return }
+            didDrag = true
+        }
+        let delta = dockEdge.isVertical ? (current.y - anchor.y) : (current.x - anchor.x)
+        dragAnchor = current
+        onDrag?(delta)
     }
 
     override func mouseUp(with event: NSEvent) {
         let wasPressed = pressedInside
         pressedInside = false
+        dragAnchor = nil
+        // A drag is never a click, even if the cursor ends up back inside the shape.
+        guard !didDrag else { didDrag = false; return }
         guard wasPressed else { return }
         let point = convert(event.locationInWindow, from: nil)
         guard shapeLayer.path?.contains(point) ?? false else { return }

@@ -109,8 +109,11 @@ enum PreviewSnapshotHarness {
             Scenario(name: "card-09-top-770-dark-timed-out-kept-mode", colorScheme: .dark, content: card(timedOut, .top)),
             Scenario(name: "card-unverified-eventmap-dark", colorScheme: .dark, content: card(unverifiedEventMap, .top)),
             Scenario(name: "card-32-bottom-770-dark", colorScheme: .dark, content: card(s770, .bottom)),
+            Scenario(name: "card-bottom-770-light", colorScheme: .light, content: card(s770, .bottom)),
             Scenario(name: "card-31-left-770-dark", colorScheme: .dark, content: card(s770, .left)),
             Scenario(name: "card-30-left-770-light", colorScheme: .light, content: card(s770, .left)),
+            Scenario(name: "card-right-770-dark", colorScheme: .dark, content: card(s770, .right)),
+            Scenario(name: "card-right-770-light", colorScheme: .light, content: card(s770, .right)),
             Scenario(name: "card-03-top-670-dark", colorScheme: .dark, content: card(s670, .top)),
             Scenario(name: "card-lowbattery-dark", colorScheme: .dark, content: card(lowBattery, .top)),
             Scenario(name: "card-lowbattery-light", colorScheme: .light, content: card(lowBattery, .top)),
@@ -126,6 +129,12 @@ enum PreviewSnapshotHarness {
             Scenario(name: "pill-16-variants-light", colorScheme: .light, content: pill(s770, .top(isNotched: false), scheme: .light)),
             Scenario(name: "pill-notch-dark", colorScheme: .dark, content: pill(s770, .top(isNotched: true), scheme: .dark)),
             Scenario(name: "pill-connecting-dark", colorScheme: .dark, content: pill(connecting, .top(isNotched: false), connection: .connecting, scheme: .dark)),
+            Scenario(name: "pill-bottom-dark", colorScheme: .dark, content: pill(s770, .bottom, scheme: .dark)),
+            Scenario(name: "pill-bottom-light", colorScheme: .light, content: pill(s770, .bottom, scheme: .light)),
+            Scenario(name: "pill-left-dark", colorScheme: .dark, content: pill(s770, .left, scheme: .dark)),
+            Scenario(name: "pill-left-light", colorScheme: .light, content: pill(s770, .left, scheme: .light)),
+            Scenario(name: "pill-right-dark", colorScheme: .dark, content: pill(s770, .right, scheme: .dark)),
+            Scenario(name: "pill-right-light", colorScheme: .light, content: pill(s770, .right, scheme: .light)),
             Scenario(name: "zzz-icon-closeup", colorScheme: .dark, content: AnyView(
                 HStack(spacing: 16) {
                     iconCloseup("IconSettings")

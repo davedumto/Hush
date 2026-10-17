@@ -293,6 +293,24 @@ struct CollapsedPill: View {
     .background(Color.white)
 }
 
+#Preview("Bottom Dock - Dark") {
+    CollapsedPill(variant: .resolve(
+        device: .matched(photo: HeadphonePhotoAssetNames(black: "Tune770Black", white: "Tune770White")),
+        connection: .connected, batteryPercent: 82, theme: .dark, dock: .bottom
+    ))
+    .padding(40)
+    .background(Color.black)
+}
+
+#Preview("Bottom Dock - Light") {
+    CollapsedPill(variant: .resolve(
+        device: .matched(photo: HeadphonePhotoAssetNames(black: "Tune770Black", white: "Tune770White")),
+        connection: .connected, batteryPercent: 82, theme: .light, dock: .bottom
+    ))
+    .padding(40)
+    .background(Color.white)
+}
+
 #Preview("Notch") {
     CollapsedPill(variant: .resolve(
         device: .matched(photo: HeadphonePhotoAssetNames(black: "Tune770Black", white: "Tune770White")),

@@ -28,6 +28,13 @@ struct IslandSettingsView: View {
     @AppStorage(IslandSettings.Key.hideMenuBarGap) private var hideMenuBarGap: Bool = true
     @AppStorage(IslandSettings.Key.outline) private var outlineEnabled: Bool = false
     @AppStorage(IslandSettings.Key.chosenDisplayUUID) private var chosenDisplayUUID: String = ""
+    @AppStorage(IslandSettings.Key.autoExpandOnConnect) private var autoExpandOnConnect: Bool = false
+
+    /// Edge is persisted per display (IslandSettings.dockEdge(forDisplayUUID:)), not under one
+    /// fixed key, so it can't bind directly to @AppStorage the way every setting above does —
+    /// this just mirrors whichever display is currently active, seeded on appear and pushed back
+    /// through AppDelegate.setDockEdge on change (which both applies it live and persists it).
+    @State private var selectedEdge: DockEdge = .top
 
     var body: some View {
         Form {
@@ -65,6 +72,16 @@ struct IslandSettingsView: View {
             Section("Behavior") {
                 Toggle("Hide menu bar gap", isOn: $hideMenuBarGap)
                 Toggle("Outline", isOn: $outlineEnabled)
+                Toggle("Auto-expand on connect", isOn: $autoExpandOnConnect)
+            }
+
+            Section("Position") {
+                Picker("Edge", selection: $selectedEdge) {
+                    Text("Top").tag(DockEdge.top)
+                    Text("Bottom").tag(DockEdge.bottom)
+                    Text("Left").tag(DockEdge.left)
+                    Text("Right").tag(DockEdge.right)
+                }
             }
 
             Section("Display") {
@@ -79,6 +96,8 @@ struct IslandSettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 360)
+        .onAppear { selectedEdge = appDelegate.currentDockEdge }
+        .onChange(of: selectedEdge) { _, newEdge in appDelegate.setDockEdge(newEdge) }
         .onChange(of: islandSizeRaw) { _, _ in appDelegate.notchSettingsDidChange() }
         .onChange(of: customWidth) { _, _ in appDelegate.notchSettingsDidChange() }
         .onChange(of: customHeight) { _, _ in appDelegate.notchSettingsDidChange() }

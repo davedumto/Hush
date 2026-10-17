@@ -1,5 +1,28 @@
 import SwiftUI
 
+/// Bridges the pure geometry-layer `DockEdge` (DockPlacement.swift) to the view-layer dock
+/// vocabulary `CardDock`/`PillDock` already use — a 1:1 mapping, kept here rather than in
+/// DockPlacement.swift so that file stays framework-free (it only needs Foundation/CoreGraphics).
+extension DockEdge {
+    var cardDock: CardDock {
+        switch self {
+        case .top: return .top
+        case .bottom: return .bottom
+        case .left: return .left
+        case .right: return .right
+        }
+    }
+
+    func pillDock(isNotched: Bool) -> PillDock {
+        switch self {
+        case .top: return .top(isNotched: isNotched)
+        case .bottom: return .bottom
+        case .left: return .left
+        case .right: return .right
+        }
+    }
+}
+
 /// Transient presentation state for the notch panel (expanded/collapsed). Deliberately separate
 /// from HeadphoneState, which is device state, not UI state.
 @Observable
@@ -14,7 +37,10 @@ final class NotchUIState {
 struct NotchView: View {
     let state: HeadphoneState
     let uiState: NotchUIState
-    let collapsedSize: CGSize
+    /// A closure, not a frozen CGSize: NotchPanel builds this NotchView once, but the collapsed
+    /// pill's own size can change later (a dock-edge change, or an Island Settings change to the
+    /// top-dock capsule/notch sizing).
+    let collapsedSize: () -> CGSize
     let onSelectNoiseMode: (CommandableNoiseMode) -> Void
     /// Per-mode "is this command frame hardware-verified" check (Tune770NCProfile.isModeVerified)
     /// — only verified modes' segments are tappable. Off has no command frame at all (none has
@@ -30,6 +56,10 @@ struct NotchView: View {
     /// reconstructs it, so a plain value would never reflect a later display change. Drives
     /// CollapsedPill's always-black, square-top notch variant.
     let isNotched: () -> Bool
+    /// Which screen edge the island is currently docked to (design/DESIGN_GUIDE.md §6) — a
+    /// closure, same reasoning as `isNotched`: NotchPanel builds this NotchView once, but the
+    /// edge can change later (drag, Island Settings, a screen change).
+    let dockEdge: () -> DockEdge
     /// The expanded card's cut-out tab collapses the card when tapped (design/DESIGN_GUIDE.md §4)
     /// — a closure, like the other NotchPanel-owned behaviors, since collapsing is a real window/
     /// silhouette transition NotchPanel owns, not something NotchView can trigger by itself.
@@ -59,8 +89,9 @@ struct NotchView: View {
 
     @ViewBuilder
     private var collapsedContent: some View {
+        let size = collapsedSize()
         CollapsedPill(variant: pillVariant)
-            .frame(width: collapsedSize.width, height: collapsedSize.height)
+            .frame(width: size.width, height: size.height)
     }
 
     /// design/DESIGN_GUIDE.md §5 "Connecting": the classic link is up but no status event has
@@ -68,26 +99,21 @@ struct NotchView: View {
     /// card), never a new piece of raw Bluetooth state.
     private var isConnecting: Bool { state.connection == .connected && state.noiseMode == .unknown }
 
-    /// Bridges live app state to PillVariant.resolve — the app only ever docks to the top today
-    /// (NotchPanel has no left/right/bottom placement logic yet), so bottom/left/right stay
-    /// exercised only by CollapsedPill's own previews/tests. `.connecting` *is* reachable from
-    /// here now, via `isConnecting` above.
+    /// Bridges live app state to PillVariant.resolve.
     private var pillVariant: PillVariant {
         PillVariant.resolve(
             device: state.connection == .connected ? .matched(photo: state.photoAssetNames) : .noDevice,
             connection: isConnecting ? .connecting : .connected,
             batteryPercent: state.batteryPercent,
             theme: colorScheme == .dark ? .dark : .light,
-            dock: .top(isNotched: isNotched())
+            dock: dockEdge().pillDock(isNotched: isNotched())
         )
     }
 
     @ViewBuilder
     private var expandedContent: some View {
-        // Only the top dock is reachable from live app state today — see ExpandedCard's own doc
-        // comment for why bottom/left/right exist (pure logic/previews) but aren't wired in yet.
         ExpandedCard(
-            state: state, dock: .top, onCollapseTapped: onCollapseTabTapped, isModeVerified: isModeVerified,
+            state: state, dock: dockEdge().cardDock, onCollapseTapped: onCollapseTabTapped, isModeVerified: isModeVerified,
             supportsNoiseControl: supportsNoiseControl(), onSelectNoiseMode: onSelectNoiseMode,
             onReconnectTapped: onReconnectTapped, onOpenBluetoothSettingsTapped: onOpenBluetoothSettingsTapped,
             lastMatchedProfileDisplayName: lastMatchedProfileDisplayName()

@@ -173,6 +173,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel?.isNotched ?? false
     }
 
+    var currentDockEdge: DockEdge {
+        panel?.currentEdge ?? .top
+    }
+
+    /// Island Settings' edge picker. Same next-run-loop-turn deferral as `notchSettingsDidChange`
+    /// and for the same reason — this fires from inside the Picker's own onChange while it's
+    /// still mid-click.
+    func setDockEdge(_ edge: DockEdge) {
+        DispatchQueue.main.async { [weak self] in
+            self?.panel?.setDockEdge(edge)
+        }
+    }
+
     /// Whether `mode`'s command frame is independently verified — the segmented control and the
     /// menu bar dropdown both gate on this, not just on link readiness, since an unverified
     /// command frame could be sending something other than what it's labeled. False whenever no

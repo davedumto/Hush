@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// Reads/writes every user-adjustable geometry setting in one place. Each typed accessor clamps
@@ -20,6 +21,14 @@ enum IslandSettings {
         static let hideMenuBarGap = "islandHideMenuBarGap"
         static let outline = "islandOutlineEnabled"
         static let chosenDisplayUUID = "islandChosenDisplayUUID"
+        static let autoExpandOnConnect = "islandAutoExpandOnConnect"
+        /// Per-display edge is stored under one key per display UUID, not a single shared key —
+        /// design/DESIGN_GUIDE.md §6: "save edge and offset per display."
+        static func dockEdge(forDisplayUUID uuid: String) -> String { "islandDockEdge.\(uuid)" }
+        /// Offset is further keyed by edge, not just display: a horizontal (top/bottom) offset
+        /// and a vertical (left/right) one aren't the same number along the same axis, so one
+        /// display switching edges must never apply the old edge's raw offset to the new one.
+        static func dockOffset(forDisplayUUID uuid: String, edge: DockEdge) -> String { "islandDockOffset.\(uuid).\(edge.rawValue)" }
     }
 
     static var size: IslandSize {
@@ -88,5 +97,35 @@ enum IslandSettings {
             if let newValue { UserDefaults.standard.set(newValue, forKey: Key.chosenDisplayUUID) }
             else { UserDefaults.standard.removeObject(forKey: Key.chosenDisplayUUID) }
         }
+    }
+
+    /// design/DESIGN_GUIDE.md §5 "Connecting"'s own trigger — off by default: expanding on every
+    /// connect is a bigger behavior change than this task's scope, so it's opt-in, not assumed.
+    static var autoExpandOnConnect: Bool {
+        get { UserDefaults.standard.bool(forKey: Key.autoExpandOnConnect) }
+        set { UserDefaults.standard.set(newValue, forKey: Key.autoExpandOnConnect) }
+    }
+
+    /// `.top` (the only edge reachable before this task) when nothing has been saved yet for this
+    /// display.
+    static func dockEdge(forDisplayUUID uuid: String) -> DockEdge {
+        guard let raw = UserDefaults.standard.string(forKey: Key.dockEdge(forDisplayUUID: uuid)) else { return .top }
+        return DockEdge(rawValue: raw) ?? .top
+    }
+
+    static func setDockEdge(_ edge: DockEdge, forDisplayUUID uuid: String) {
+        UserDefaults.standard.set(edge.rawValue, forKey: Key.dockEdge(forDisplayUUID: uuid))
+    }
+
+    /// 0 (centered — §6: "Default is the middle of the edge") when nothing has been saved yet for
+    /// this exact display+edge combination.
+    static func dockOffset(forDisplayUUID uuid: String, edge: DockEdge) -> CGFloat {
+        let key = Key.dockOffset(forDisplayUUID: uuid, edge: edge)
+        guard UserDefaults.standard.object(forKey: key) != nil else { return 0 }
+        return UserDefaults.standard.double(forKey: key)
+    }
+
+    static func setDockOffset(_ offset: CGFloat, forDisplayUUID uuid: String, edge: DockEdge) {
+        UserDefaults.standard.set(Double(offset), forKey: Key.dockOffset(forDisplayUUID: uuid, edge: edge))
     }
 }

@@ -4,8 +4,8 @@ import os.log
 
 extension NSScreen {
     /// Stable per-display identifier (survives an external monitor being unplugged/reconnected,
-    /// unlike CGDirectDisplayID which can be reassigned). Used only for the "chosen display"
-    /// setting — nothing here is positioned per-display anymore.
+    /// unlike CGDirectDisplayID which can be reassigned). Used for the "chosen display" setting
+    /// and for per-display dock edge/offset persistence.
     var stableDisplayUUIDString: String? {
         guard let screenNumber = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
             return nil
@@ -23,9 +23,16 @@ extension NSScreen {
 /// Borderless, non-activating overlay panel hosting the island: a native CAShapeLayer silhouette
 /// (NotchSilhouetteView) with SwiftUI content (NotchView) layered on top. Ported from
 /// vorssaint-utils's NotchPanel/NotchWindowHost/NotchService (geometry resolution, the
-/// envelope-then-settle resize, hover open/close, and the screen-edge click area for a floating
-/// capsule) — no dragging, no per-display saved position; the island is fixed, centered on the
-/// menu-bar display, pinned to its top edge.
+/// envelope-then-settle resize) — click-to-open/drag/four-edge docking (design/DESIGN_GUIDE.md §6,
+/// §9.2) are this app's own additions on top of that base.
+///
+/// `.top` keeps using IslandGeometry's own notch/capsule-aware sizing and frame (notch fusion has
+/// no equivalent on the other three edges); `.bottom`/`.left`/`.right` use the much simpler
+/// DockPlacement math. `windowFrame(for:)`/`contentOrigin(for:envelopeSize:)` are the two places
+/// that branch on the current edge — everything else (the envelope-then-settle resize itself,
+/// silhouette animation, content reveal timing) is shared and edge-agnostic, unchanged from before
+/// this task, per the task's own "keep the existing expand and collapse transitions working as
+/// they are."
 @MainActor
 final class NotchPanel: NSPanel {
     static let overlayCollectionBehavior: NSWindow.CollectionBehavior = [
@@ -49,6 +56,16 @@ final class NotchPanel: NSPanel {
     private var hosting: NSHostingView<NotchView>!
 
     private var geometry: IslandGeometry
+    /// The resolved display's visibleFrame (excludes the menu bar and, where applicable, the
+    /// Dock) — design/DESIGN_GUIDE.md §6: bottom/left/right placement all key off this, not the
+    /// raw screen frame, so a bottom dock naturally sits above the Dock.
+    private var visibleFrame: CGRect
+    private var currentDisplayUUID: String?
+    private var edge: DockEdge
+    /// Points from the middle of `edge`, already clamped — design/DESIGN_GUIDE.md §6: "centred
+    /// along its edge unless dragged."
+    private var offset: CGFloat
+
     private var currentSize: CGSize
     private var isAnimating = false
     /// Bumped on every present() call; a stale completion whose generation no longer matches is
@@ -58,35 +75,40 @@ final class NotchPanel: NSPanel {
     private var presentGeneration = 0
 
     private var menuBarMeasurements = MenuBarMeasurements()
-    private var globalMouseMonitor: Any?
+    /// Both added only while expanded, removed on collapse (design/DESIGN_GUIDE.md §9.2) — unlike
+    /// the screen-edge monitors below, which are about *opening* a floating capsule and have
+    /// nothing to do with being expanded.
+    private var outsideClickMonitor: Any?
+    private var escKeyMonitor: Any?
     private var screenEdgeMonitors: [Any] = []
     private var screenEdgePressed = false
     private var autoCollapseWorkItem: DispatchWorkItem?
-    private var hoverOpenWorkItem: DispatchWorkItem?
-    private var hoverCloseWorkItem: DispatchWorkItem?
     private var contentRevealWorkItem: DispatchWorkItem?
 
-    private let hoverOpenDelay: TimeInterval = 0.15
-    private let hoverCloseDelay: TimeInterval = 0.4
     /// Extra transparent room reserved, at rest, around both the pill and the card so their own
     /// shadows/glows (CollapsedPill, ExpandedCard — both reach past their own bounds) aren't
-    /// clipped by the window's edge. Symmetric on the sides; reserved below only, since nothing
-    /// needs to render above a top-anchored shape. Deliberately a flat constant, not computed
-    /// from the real shadow radii — kept minimal pending full edge docking.
+    /// clipped by the window's edge. The docked edge itself stays flush (nothing needs to render
+    /// past a flush edge); the margin only goes on the other three sides — see
+    /// `restingEnvelopeSize(for:edge:)`.
     private static let shadowMargin: CGFloat = 40
 
-    private static func restingEnvelopeSize(for contentSize: CGSize) -> CGSize {
-        CGSize(width: contentSize.width + shadowMargin * 2, height: contentSize.height + shadowMargin)
+    /// Inflates `contentSize` for the resting envelope: double margin on the two sides
+    /// perpendicular to `edge` (symmetric, since the content is centered along the edge), single
+    /// margin on the far side along the docked axis (the near side is flush against the docked
+    /// edge, so it needs none).
+    private static func restingEnvelopeSize(for contentSize: CGSize, edge: DockEdge) -> CGSize {
+        edge.isVertical
+            ? CGSize(width: contentSize.width + shadowMargin, height: contentSize.height + shadowMargin * 2)
+            : CGSize(width: contentSize.width + shadowMargin * 2, height: contentSize.height + shadowMargin)
     }
 
-    /// ExpandedCard's own fixed size (design/DESIGN_GUIDE.md §4/§10) — only the top dock is live
-    /// today (see ExpandedCard's own doc comment), so this is always the horizontal-dock width.
-    /// A real constant, not a measurement: unlike the old variable-content card this replaced,
-    /// ExpandedCard's height of 470 is fixed regardless of what it's showing, so there's nothing
-    /// to measure — see `expandedSize(for:)`'s own doc comment for why measuring it anyway
-    /// (the previous approach here) was actively wrong, not just redundant.
-    private static let expandedCardWidth: CGFloat = 374
-    private static let expandedCardHeight: CGFloat = 470
+    /// ExpandedCard's own fixed size (design/DESIGN_GUIDE.md §4/§10) — a real constant, not a
+    /// measurement: ExpandedCard's height of 470 is fixed regardless of what it's showing (or
+    /// which dock it's on; only the width differs, horizontal vs. vertical docks), so there's
+    /// nothing to measure. See the git history for why measuring it anyway (the original approach
+    /// here, before ExpandedCard had a fixed size) was actively wrong, not just redundant.
+    private static let expandedCardSize = CGSize(width: 374, height: 470)
+    private static let expandedCardSizeVertical = CGSize(width: 296, height: 470)
 
     init(
         headphoneState: HeadphoneState, onSelectNoiseMode: @escaping (CommandableNoiseMode) -> Void,
@@ -108,17 +130,22 @@ final class NotchPanel: NSPanel {
         let screen = resolution.screen
         let initialGeometry = Self.baseGeometry(for: screen, measurements: MenuBarMeasurements())
         self.geometry = initialGeometry
-        self.currentSize = initialGeometry.collapsedSize
+        self.visibleFrame = screen?.visibleFrame ?? initialGeometry.screen
+        let uuid = screen?.stableDisplayUUIDString
+        self.currentDisplayUUID = uuid
+        let resolvedEdge = uuid.map { IslandSettings.dockEdge(forDisplayUUID: $0) } ?? .top
+        self.edge = resolvedEdge
+        self.offset = uuid.map { IslandSettings.dockOffset(forDisplayUUID: $0, edge: resolvedEdge) } ?? 0
+        self.currentSize = Self.collapsedSize(for: resolvedEdge, geometry: initialGeometry)
 
         super.init(
-            contentRect: initialGeometry.frame(for: Self.restingEnvelopeSize(for: initialGeometry.collapsedSize)),
+            contentRect: .zero, // real frame set via setFrame(_:display:) below, once contentView/silhouette exist.
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
 
         Self.logDisplayResolution(resolution, logger: logger)
-        logger.info("NotchPanel created. frame=\(NSStringFromRect(self.frame), privacy: .public)")
 
         isOpaque = false
         backgroundColor = .clear
@@ -130,9 +157,10 @@ final class NotchPanel: NSPanel {
 
         hosting = NSHostingView(
             rootView: NotchView(
-                state: headphoneState, uiState: uiState, collapsedSize: initialGeometry.collapsedSize,
+                state: headphoneState, uiState: uiState, collapsedSize: { [weak self] in self?.currentSize ?? .zero },
                 onSelectNoiseMode: onSelectNoiseMode, isModeVerified: isModeVerified,
                 supportsNoiseControl: supportsNoiseControl, isNotched: { [weak self] in self?.isNotched ?? false },
+                dockEdge: { [weak self] in self?.edge ?? .top },
                 onCollapseTabTapped: { [weak self] in self?.handleTabTap() },
                 onReconnectTapped: onReconnectTapped, onOpenBluetoothSettingsTapped: onOpenBluetoothSettingsTapped,
                 lastMatchedProfileDisplayName: lastMatchedProfileDisplayName
@@ -146,7 +174,7 @@ final class NotchPanel: NSPanel {
         // overflow right back off, same as it would an oversized estimate.
         hosting.wantsLayer = true
 
-        let initialEnvelope = Self.restingEnvelopeSize(for: initialGeometry.collapsedSize)
+        let initialEnvelope = Self.restingEnvelopeSize(for: currentSize, edge: edge)
         let container = NSView(frame: NSRect(origin: .zero, size: initialEnvelope))
         container.wantsLayer = true
         container.addSubview(silhouette)
@@ -154,19 +182,23 @@ final class NotchPanel: NSPanel {
         contentView = container
 
         silhouette.onTap = { [weak self] in self?.handleTap() }
-        silhouette.onHoverChange = { [weak self] hovering in self?.handleHover(hovering) }
+        silhouette.onDrag = { [weak self] delta in self?.handleDrag(delta) }
+        silhouette.dockEdge = edge
 
-        layoutContent(for: initialGeometry.collapsedSize, envelopeSize: initialEnvelope)
+        layoutContent(for: currentSize, envelopeSize: initialEnvelope)
+        setFrame(windowFrame(for: initialEnvelope), display: false)
+        logger.info("NotchPanel created. frame=\(NSStringFromRect(self.frame), privacy: .public) edge=\(self.edge.rawValue, privacy: .public)")
         silhouette.setFillColor(currentSilhouetteFillColor())
         // Give the silhouette an initial path immediately — otherwise it stays empty (zero
-        // frame) until the first expand/collapse transition ever runs.
+        // frame) until the first expand/collapse transition ever runs. Only .top ever floats as
+        // a capsule with a gap; the other three edges are always flush-docked pills.
+        let initialGap = edge == .top ? initialGeometry.floatingGap : nil
         silhouette.resize(
-            to: initialGeometry.collapsedSize, from: initialGeometry.collapsedSize,
-            startGap: initialGeometry.floatingGap, targetGap: initialGeometry.floatingGap,
+            to: currentSize, from: currentSize,
+            startGap: initialGap, targetGap: initialGap,
             envelopeSize: initialEnvelope, reduceMotion: true, completion: {}
         )
 
-        installMonitors()
         syncScreenEdgeMonitors()
 
         NotificationCenter.default.addObserver(
@@ -180,7 +212,8 @@ final class NotchPanel: NSPanel {
     override func accessibilitySubrole() -> NSAccessibility.Subrole? { .unknown }
 
     deinit {
-        if let globalMouseMonitor { NSEvent.removeMonitor(globalMouseMonitor) }
+        if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
+        if let escKeyMonitor { NSEvent.removeMonitor(escKeyMonitor) }
         screenEdgeMonitors.forEach(NSEvent.removeMonitor)
     }
 
@@ -207,8 +240,12 @@ final class NotchPanel: NSPanel {
 
     func handleClassicConnected() {
         setVisible(true)
-        expand()
-        scheduleAutoCollapse(after: 4)
+        // design/DESIGN_GUIDE.md: auto-expand-on-connect is an opt-in Island Settings toggle,
+        // default off — connecting no longer expands the card unless the user asked for that.
+        if IslandSettings.autoExpandOnConnect {
+            expand()
+            scheduleAutoCollapse(after: 4)
+        }
     }
 
     func handleClassicDisconnected() {
@@ -217,24 +254,59 @@ final class NotchPanel: NSPanel {
         collapse()
     }
 
-    // MARK: - Settings changed (size/silhouette/fits/outline/display)
+    // MARK: - Settings changed (size/silhouette/fits/outline/display/edge)
 
-    var isNotched: Bool { geometry.isNotched }
+    var isNotched: Bool { edge == .top && geometry.isNotched }
+    var currentEdge: DockEdge { edge }
 
     func settingsDidChange() {
         reposition()
     }
 
-    // MARK: - Expand / collapse
-
-    private func expand() {
-        guard !uiState.isExpanded else { return }
-        present(expanded: true)
+    /// Island Settings' edge picker calls this directly (not through `settingsDidChange()`,
+    /// which just repositions on the *current* edge) — design/DESIGN_GUIDE.md §6: "Changing the
+    /// edge while the card is expanded: collapse first, move the pill, then expand from the new
+    /// edge. Never animate the card across the screen."
+    func setDockEdge(_ newEdge: DockEdge) {
+        guard newEdge != edge else { return }
+        switch DockPlacement.edgeChangeOrdering(isExpanded: uiState.isExpanded) {
+        case .collapseFirst:
+            // Collapse (normally animated — this step doesn't relocate anything, so there's
+            // nothing wrong with animating it) on the *old* edge, wait for that to actually
+            // finish, only then move the pill (unanimated — this is the step that would
+            // otherwise visibly cross the screen) and expand from the new edge.
+            collapse { [weak self] in
+                guard let self else { return }
+                self.applyEdgeChange(newEdge)
+                self.presentImmediately(expanded: false)
+                self.expand()
+            }
+        case .moveDirectly:
+            applyEdgeChange(newEdge)
+            presentImmediately(expanded: false)
+        }
     }
 
-    private func collapse() {
-        guard uiState.isExpanded else { return }
-        present(expanded: false)
+    private func applyEdgeChange(_ newEdge: DockEdge) {
+        edge = newEdge
+        silhouette.dockEdge = newEdge
+        offset = currentDisplayUUID.map { IslandSettings.dockOffset(forDisplayUUID: $0, edge: newEdge) } ?? 0
+        if let currentDisplayUUID { IslandSettings.setDockEdge(newEdge, forDisplayUUID: currentDisplayUUID) }
+        currentSize = Self.collapsedSize(for: newEdge, geometry: geometry)
+    }
+
+    // MARK: - Expand / collapse
+
+    private func expand(completion: @escaping () -> Void = {}) {
+        guard !uiState.isExpanded else { completion(); return }
+        present(expanded: true, completion: completion)
+        installExpandedMonitors()
+    }
+
+    private func collapse(completion: @escaping () -> Void = {}) {
+        guard uiState.isExpanded else { completion(); return }
+        present(expanded: false, completion: completion)
+        removeExpandedMonitors()
     }
 
     private func handleTap() {
@@ -262,47 +334,70 @@ final class NotchPanel: NSPanel {
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: item)
     }
 
-    // MARK: - Hover open/close (delayed, so it doesn't flicker at the edge)
+    // MARK: - Click to open/close (design/DESIGN_GUIDE.md §9.2)
+    //
+    // A click on the pill itself opens it (NotchSilhouetteView.onTap -> handleTap, always
+    // installed). Collapsing happens three ways: a click on the tab (handleTabTap, always
+    // installed — the tab only exists once expanded anyway), a click outside the card, or Esc —
+    // the last two are both global monitors, installed only while expanded and removed on
+    // collapse, so there's no standing global monitor at all while collapsed.
 
-    private func handleHover(_ hovering: Bool) {
-        if hovering {
-            hoverCloseWorkItem?.cancel()
-            hoverCloseWorkItem = nil
-            guard !uiState.isExpanded else { return }
-            let item = DispatchWorkItem { [weak self] in self?.expand() }
-            hoverOpenWorkItem = item
-            DispatchQueue.main.asyncAfter(deadline: .now() + hoverOpenDelay, execute: item)
-        } else {
-            hoverOpenWorkItem?.cancel()
-            hoverOpenWorkItem = nil
-            guard uiState.isExpanded else { return }
-            let item = DispatchWorkItem { [weak self] in self?.collapse() }
-            hoverCloseWorkItem = item
-            DispatchQueue.main.asyncAfter(deadline: .now() + hoverCloseDelay, execute: item)
+    private func installExpandedMonitors() {
+        guard outsideClickMonitor == nil else { return }
+        // A *global* monitor only ever reports events in other apps' windows, never this one's
+        // own — "clicks inside the card never collapse it" falls out of that for free, the same
+        // way it always has.
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            Task { @MainActor in self?.handleOutsideClick() }
+        }
+        escKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53 else { return } // Esc
+            Task { @MainActor in self?.handleEscKey() }
         }
     }
 
-    // MARK: - Click outside collapses (global monitor); screen-edge strip above a capsule opens it
-
-    private func installMonitors() {
-        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in
-            Task { @MainActor in self?.handleOutsideClick() }
-        }
+    private func removeExpandedMonitors() {
+        if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
+        outsideClickMonitor = nil
+        if let escKeyMonitor { NSEvent.removeMonitor(escKeyMonitor) }
+        escKeyMonitor = nil
     }
 
     private func handleOutsideClick() {
-        guard uiState.isExpanded else { return }
         autoCollapseWorkItem?.cancel()
         autoCollapseWorkItem = nil
         collapse()
     }
 
-    /// The thin strip of real menu bar directly above a floating capsule isn't part of our own
-    /// window, so a normal click there never reaches us — only a capsule needs this.
+    private func handleEscKey() {
+        autoCollapseWorkItem?.cancel()
+        autoCollapseWorkItem = nil
+        collapse()
+    }
+
+    // MARK: - Drag along the edge (collapsed only — design/DESIGN_GUIDE.md §6)
+
+    private func handleDrag(_ delta: CGFloat) {
+        guard !uiState.isExpanded else { return }
+        let expandedSize = Self.expandedSize(for: edge, geometry: geometry)
+        offset = DockPlacement.clampedOffset(
+            offset + delta, collapsedSize: currentSize, expandedSize: expandedSize, edge: edge, visibleFrame: visibleFrame
+        )
+        // A live drag just follows the cursor — no envelope-then-settle animation, the same way
+        // dragging any ordinary window doesn't animate.
+        let envelope = Self.restingEnvelopeSize(for: currentSize, edge: edge)
+        setFrame(windowFrame(for: envelope), display: true)
+        if let currentDisplayUUID { IslandSettings.setDockOffset(offset, forDisplayUUID: currentDisplayUUID, edge: edge) }
+    }
+
+    // MARK: - Click outside collapses (global monitor); screen-edge strip above a capsule opens it
+
+    /// The thin strip of real menu bar directly above a floating top capsule isn't part of our
+    /// own window, so a normal click there never reaches us — only a top capsule needs this; the
+    /// other three edges have no such gap to bridge.
     private var screenEdgeClickArea: CGRect? {
-        guard let gap = geometry.floatingGap, gap > 0, !uiState.isExpanded, isVisible, !ignoresMouseEvents else { return nil }
-        let size = geometry.collapsedSize
-        let islandFrame = geometry.frame(for: size)
+        guard edge == .top, let gap = geometry.floatingGap, gap > 0, !uiState.isExpanded, isVisible, !ignoresMouseEvents else { return nil }
+        let islandFrame = windowFrame(for: currentSize)
         return CGRect(x: islandFrame.minX, y: islandFrame.maxY, width: islandFrame.width, height: gap + 2)
     }
 
@@ -351,10 +446,32 @@ final class NotchPanel: NSPanel {
         }
         menuBarMeasurements.retainDisplays(NSScreen.screens.map(\.notchDisplayID))
         let next = Self.baseGeometry(for: screen, measurements: menuBarMeasurements)
-        guard next != geometry || currentSize != (uiState.isExpanded ? expandedSize(for: next) : next.collapsedSize) else { return }
+        let nextVisibleFrame = screen.visibleFrame
+        let nextUUID = screen.stableDisplayUUIDString
+
+        if nextUUID != currentDisplayUUID {
+            // A genuinely different physical display — load *that* display's own saved edge/
+            // offset rather than carrying over whatever was in memory for the old one.
+            currentDisplayUUID = nextUUID
+            edge = nextUUID.map { IslandSettings.dockEdge(forDisplayUUID: $0) } ?? .top
+            offset = nextUUID.map { IslandSettings.dockOffset(forDisplayUUID: $0, edge: edge) } ?? 0
+            silhouette.dockEdge = edge
+        }
+
+        let nextCollapsedSize = Self.collapsedSize(for: edge, geometry: next)
+        guard next != geometry || visibleFrame != nextVisibleFrame
+            || currentSize != (uiState.isExpanded ? Self.expandedSize(for: edge, geometry: next) : nextCollapsedSize)
+        else { return }
+
         geometry = next
+        visibleFrame = nextVisibleFrame
+        // A resolution/Dock change can push the current offset out of bounds even though the
+        // display itself didn't change — re-clamp (never reset to 0) so a drag the user placed
+        // deliberately only moves as little as it has to.
+        let expandedSizeNow = Self.expandedSize(for: edge, geometry: next)
+        offset = DockPlacement.clampedOffset(offset, collapsedSize: nextCollapsedSize, expandedSize: expandedSizeNow, edge: edge, visibleFrame: nextVisibleFrame)
         syncScreenEdgeMonitors()
-        present(expanded: uiState.isExpanded)
+        presentImmediately(expanded: uiState.isExpanded)
     }
 
     /// Resets the saved display preference ("Automatic") and re-resolves. Exposed for the
@@ -429,32 +546,46 @@ final class NotchPanel: NSPanel {
         )
     }
 
-    /// ExpandedCard's own fixed 374x470 (design/DESIGN_GUIDE.md §10), capped against the real
-    /// screen's bounds for safety on a small/unusual display — not measured, since (unlike the
-    /// old variable-content card this replaced) that size no longer depends on what the card is
-    /// actually showing. Measuring it anyway, via a throwaway NSHostingView probe's `fittingSize`,
-    /// is what this function used to do — and it was actively wrong, not just redundant: that
-    /// probe path wasn't exercised by the snapshot-harness comparison (ImageRenderer renders each
-    /// scenario directly, never through `fittingSize`), so it shipped seemingly verified while
-    /// actually under-measuring the card's real height — the window came out too short, and
-    /// content size, which is taken as 100% correct, is being assigned its own documented size
-    /// (470 tall) inside the too-short envelope regardless, pushing the top of the card (and the
-    /// whole top row) up past the window's own top edge where nothing is visible to render it.
-    private func expandedSize(for geometry: IslandGeometry) -> CGSize {
-        let width = min(Self.expandedCardWidth, geometry.screen.width - 24)
-        let height = min(Self.expandedCardHeight, geometry.screen.height - 48)
+    /// `.top`'s own notch/capsule-aware collapsed size (IslandGeometry); every other edge is
+    /// just CollapsedPill's fixed 46x34/34x46 (design/DESIGN_GUIDE.md §3) — there's no camera or
+    /// menu-bar simulation to size around off the top edge.
+    private static func collapsedSize(for edge: DockEdge, geometry: IslandGeometry) -> CGSize {
+        edge == .top ? geometry.collapsedSize : DockPlacement.collapsedPillSize(for: edge)
+    }
+
+    /// ExpandedCard's own fixed size, capped against the real screen's bounds for safety on a
+    /// small/unusual display.
+    private static func expandedSize(for edge: DockEdge, geometry: IslandGeometry) -> CGSize {
+        let base = edge.isVertical ? expandedCardSizeVertical : expandedCardSize
+        let width = min(base.width, geometry.screen.width - 24)
+        let height = min(base.height, geometry.screen.height - 48)
         return CGSize(width: width, height: max(80, height))
+    }
+
+    /// `.top` keeps IslandGeometry.frame(for:)'s own anchor math (notch fusion / menu-bar drop),
+    /// shifted by the current drag offset, which that method knows nothing about on its own; the
+    /// other three edges go through DockPlacement entirely.
+    private func windowFrame(for size: CGSize) -> CGRect {
+        switch edge {
+        case .top:
+            var frame = geometry.frame(for: size)
+            frame.origin.x += offset
+            return frame
+        case .bottom, .left, .right:
+            return DockPlacement.frame(for: size, edge: edge, offset: offset, visibleFrame: visibleFrame, margin: DockPlacement.edgeMargin(for: edge))
+        }
     }
 
     // MARK: - Present (envelope-then-settle resize)
 
-    private func present(expanded: Bool) {
+    private func present(expanded: Bool, completion: @escaping () -> Void = {}) {
         uiState.isExpanded = expanded
-        let target = expanded ? expandedSize(for: geometry) : geometry.collapsedSize
+        let target = expanded ? Self.expandedSize(for: edge, geometry: geometry) : Self.collapsedSize(for: edge, geometry: geometry)
         guard target != currentSize else {
             // Nothing to animate — but make sure content is actually visible, in case an earlier,
             // now-superseded transition left it hidden mid-fade.
             hosting.animator().alphaValue = 1
+            completion()
             return
         }
 
@@ -478,14 +609,16 @@ final class NotchPanel: NSPanel {
         silhouette.setFillColor(currentSilhouetteFillColor())
 
         // 1. Make the window big enough for the whole swing, then center both views within it.
-        setFrame(geometry.frame(for: envelope), display: true)
+        setFrame(windowFrame(for: envelope), display: true)
         layoutContent(for: start, envelopeSize: envelope)
 
         // The capsule's rounded-pill shape only ever belongs to the small collapsed indicator —
         // the wide expanded card is always a plain rounded rectangle (gap nil), regardless of
-        // which silhouette is chosen for the collapsed state.
-        let startGap = expanded ? geometry.floatingGap : nil
-        let targetGap = expanded ? nil : geometry.floatingGap
+        // which silhouette is chosen for the collapsed state. Only .top ever has a floating gap
+        // at all (bottom/left/right are always flush-docked pills).
+        let floatingGap = edge == .top ? geometry.floatingGap : nil
+        let startGap = expanded ? floatingGap : nil
+        let targetGap = expanded ? nil : floatingGap
 
         isAnimating = true
         silhouette.resize(
@@ -497,8 +630,8 @@ final class NotchPanel: NSPanel {
             // 2. Settle the window back down to the target size, plus the resting shadow margin
             // (restingEnvelopeSize) — not exactly the target, or CollapsedPill/ExpandedCard's own
             // shadows would have nowhere to bleed into and clip right back at the window edge.
-            let restEnvelope = Self.restingEnvelopeSize(for: target)
-            self.setFrame(self.geometry.frame(for: restEnvelope), display: true)
+            let restEnvelope = Self.restingEnvelopeSize(for: target, edge: self.edge)
+            self.setFrame(self.windowFrame(for: restEnvelope), display: true)
             self.layoutContent(for: target, envelopeSize: restEnvelope)
             // Shrinking silhouette's frame above does NOT rescale/reposition its existing path —
             // that path was computed relative to the larger envelope frame it had while
@@ -511,7 +644,26 @@ final class NotchPanel: NSPanel {
                 envelopeSize: restEnvelope, reduceMotion: true, completion: {}
             )
             self.revealContent()
+            completion()
         }
+    }
+
+    /// Snaps straight to the resting frame for the current `expanded` state with no animation at
+    /// all — used for a screen change (`reposition()`) and for the "move the pill" step of an
+    /// edge change (design/DESIGN_GUIDE.md §6: "Never animate the card across the screen").
+    private func presentImmediately(expanded: Bool) {
+        uiState.isExpanded = expanded
+        let target = expanded ? Self.expandedSize(for: edge, geometry: geometry) : Self.collapsedSize(for: edge, geometry: geometry)
+        currentSize = target
+        presentGeneration += 1 // supersede any in-flight animated present()
+        silhouette.setFillColor(currentSilhouetteFillColor())
+        let restEnvelope = Self.restingEnvelopeSize(for: target, edge: edge)
+        setFrame(windowFrame(for: restEnvelope), display: true)
+        layoutContent(for: target, envelopeSize: restEnvelope)
+        let floatingGap = edge == .top ? geometry.floatingGap : nil
+        let gap = expanded ? nil : floatingGap
+        silhouette.resize(to: target, from: target, startGap: gap, targetGap: gap, envelopeSize: restEnvelope, reduceMotion: true, completion: {})
+        hosting.animator().alphaValue = 1
     }
 
     /// Centers the silhouette and the SwiftUI content within the (always at-least-as-large-as-
@@ -529,8 +681,23 @@ final class NotchPanel: NSPanel {
         guard let container = contentView else { return }
         container.frame = NSRect(origin: .zero, size: envelopeSize)
         silhouette.frame = NSRect(origin: .zero, size: envelopeSize)
-        let origin = CGPoint(x: (envelopeSize.width - size.width) / 2, y: envelopeSize.height - size.height)
-        hosting.frame = CGRect(origin: origin, size: size)
+        hosting.frame = CGRect(origin: contentOrigin(for: size, envelopeSize: envelopeSize), size: size)
+    }
+
+    /// Where `size` sits within `envelopeSize`: flush against the docked edge's own side (nothing
+    /// needs to render past a flush edge), centered on the perpendicular axis. Mirrors
+    /// `restingEnvelopeSize(for:edge:)`'s own margin placement.
+    private func contentOrigin(for size: CGSize, envelopeSize: CGSize) -> CGPoint {
+        switch edge {
+        case .top:
+            return CGPoint(x: (envelopeSize.width - size.width) / 2, y: envelopeSize.height - size.height)
+        case .bottom:
+            return CGPoint(x: (envelopeSize.width - size.width) / 2, y: 0)
+        case .left:
+            return CGPoint(x: 0, y: (envelopeSize.height - size.height) / 2)
+        case .right:
+            return CGPoint(x: envelopeSize.width - size.width, y: (envelopeSize.height - size.height) / 2)
+        }
     }
 
     /// Content swaps during a brief hidden window, then fades in once the shape has settled.
