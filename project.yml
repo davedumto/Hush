@@ -31,7 +31,7 @@ targets:
         CFBundleDisplayName: Hush
         CFBundleIconName: AppIcon
         LSUIElement: true
-        NSBluetoothAlwaysUsageDescription: "Hush connects to your headphones to show battery and control noise cancelling."
+        NSBluetoothAlwaysUsageDescription: "Hush connects to your headphones and lets you control your JBL headphones from the menu bar."
         # design/DESIGN_GUIDE.md §2: fonts live in JBLCompanion/Fonts, copied into
         # Contents/Resources/Fonts (the folder-reference source above preserves the subfolder) and
         # registered process-wide from there at launch — no TTF needs its own Info.plist entry.
