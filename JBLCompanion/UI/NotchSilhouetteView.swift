@@ -147,8 +147,24 @@ final class NotchSilhouetteView: NSView {
         shapeLayer.frame = CGRect(origin: .zero, size: envelopeSize)
         edgeLayer.frame = CGRect(origin: .zero, size: envelopeSize)
 
+        // Flush against the docked edge's own side (nothing needs to render past a flush edge),
+        // centered on the perpendicular axis — mirrors NotchPanel.contentOrigin(for:envelopeSize:)
+        // exactly, which is what keeps this native shape and the real SwiftUI content on top of
+        // it in the same place. This used to be hardcoded to "flush top, centered horizontally"
+        // unconditionally; that was fine when `.top` was the only reachable dock, but left the
+        // shape itself (and its hit-testing) pinned to the top of the window on every other edge
+        // even after the SwiftUI content moved to the real docked edge.
         func origin(for size: CGSize) -> CGPoint {
-            CGPoint(x: (envelopeSize.width - size.width) / 2, y: envelopeSize.height - size.height)
+            switch dockEdge {
+            case .top:
+                return CGPoint(x: (envelopeSize.width - size.width) / 2, y: envelopeSize.height - size.height)
+            case .bottom:
+                return CGPoint(x: (envelopeSize.width - size.width) / 2, y: 0)
+            case .left:
+                return CGPoint(x: 0, y: (envelopeSize.height - size.height) / 2)
+            case .right:
+                return CGPoint(x: envelopeSize.width - size.width, y: (envelopeSize.height - size.height) / 2)
+            }
         }
         // 0 = flush card shape, 1 = full pill — interpolated continuously, not switched at a threshold.
         let startPillness: Double = startGap != nil ? 1 : 0
