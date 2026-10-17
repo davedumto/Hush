@@ -183,7 +183,11 @@ struct CollapsedPill: View {
 
         return ZStack(alignment: .leading) {
             RoundedRectangle(cornerRadius: 2, style: .continuous)
-                .fill(Color.white.opacity(0.35)) // track: "grey at 35%"
+                // track: "grey at 35%" — white-on-near-black already reads as grey in dark theme,
+                // but the same white was invisible against light theme's own white pill background
+                // (reported directly: the unfilled remainder of the bar disappeared entirely, not
+                // just low contrast). DeepNavy at a comparable weight for light theme instead.
+                .fill(variant.theme == .dark ? Color.white.opacity(0.35) : Theme.Brand.deepNavy.opacity(0.18))
             RoundedRectangle(cornerRadius: 2, style: .continuous)
                 .fill(Theme.Brand.orange)
                 .frame(width: trackSize.width * fraction, height: trackSize.height)
