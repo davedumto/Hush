@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Island/notch tuning controls (silhouette, capsule fit, behavior, position, display), broken
-/// out of the menu bar dropdown into its own window.
+/// Island/notch tuning controls (pill size, behavior, position, display), broken out of the menu
+/// bar dropdown into its own window.
 ///
 /// The dropdown is a native NSMenu (`.menu` style MenuBarExtra). `Toggle`/`Picker`/`Button` map
 /// onto native NSMenuItem equivalents there, which NSMenu handles natively — but `Stepper` has no
@@ -16,10 +16,7 @@ struct IslandSettingsView: View {
 
     let appDelegate: AppDelegate
 
-    @AppStorage(IslandSettings.Key.silhouette) private var silhouetteRaw: String = IslandSilhouette.capsule.rawValue
-    @AppStorage(IslandSettings.Key.capsuleFitWidth) private var capsuleFitWidth: Double = 0
-    @AppStorage(IslandSettings.Key.capsuleFitHeight) private var capsuleFitHeight: Double = 0
-    @AppStorage(IslandSettings.Key.capsuleFitDrop) private var capsuleFitDrop: Double = 0
+    @AppStorage(IslandSettings.Key.pillDiameter) private var pillDiameter: Double = Double(DockPlacement.collapsedPillDiameter)
     @AppStorage(IslandSettings.Key.chosenDisplayUUID) private var chosenDisplayUUID: String = ""
     @AppStorage(IslandSettings.Key.autoExpandOnConnect) private var autoExpandOnConnect: Bool = false
 
@@ -31,16 +28,11 @@ struct IslandSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Silhouette") {
-                Picker("Silhouette", selection: $silhouetteRaw) {
-                    Text("Capsule").tag(IslandSilhouette.capsule.rawValue)
-                    Text("Notch").tag(IslandSilhouette.notch.rawValue)
-                }
-                if silhouetteRaw == IslandSilhouette.capsule.rawValue {
-                    Stepper("Width: \(Int(capsuleFitWidth))pt", value: $capsuleFitWidth, in: IslandCapsuleFit.widthRange, step: 2)
-                    Stepper("Height: \(Int(capsuleFitHeight))pt", value: $capsuleFitHeight, in: IslandCapsuleFit.heightRange, step: 1)
-                    Stepper("Drop: \(Int(capsuleFitDrop))pt", value: $capsuleFitDrop, in: IslandCapsuleFit.dropRange, step: 1)
-                }
+            Section("Pill size") {
+                Stepper(
+                    "Diameter: \(Int(pillDiameter))pt", value: $pillDiameter,
+                    in: Double(DockPlacement.pillDiameterRange.lowerBound)...Double(DockPlacement.pillDiameterRange.upperBound), step: 4
+                )
             }
 
             Section("Behavior") {
@@ -70,10 +62,7 @@ struct IslandSettingsView: View {
         .frame(width: 360)
         .onAppear { selectedEdge = appDelegate.currentDockEdge }
         .onChange(of: selectedEdge) { _, newEdge in appDelegate.setDockEdge(newEdge) }
-        .onChange(of: silhouetteRaw) { _, _ in appDelegate.notchSettingsDidChange() }
-        .onChange(of: capsuleFitWidth) { _, _ in appDelegate.notchSettingsDidChange() }
-        .onChange(of: capsuleFitHeight) { _, _ in appDelegate.notchSettingsDidChange() }
-        .onChange(of: capsuleFitDrop) { _, _ in appDelegate.notchSettingsDidChange() }
+        .onChange(of: pillDiameter) { _, _ in appDelegate.notchSettingsDidChange() }
         .onChange(of: chosenDisplayUUID) { _, _ in appDelegate.notchSettingsDidChange() }
     }
 }

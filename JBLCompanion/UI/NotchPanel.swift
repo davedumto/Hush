@@ -26,9 +26,10 @@ extension NSScreen {
 /// envelope-then-settle resize) — click-to-open/drag/four-edge docking (design/DESIGN_GUIDE.md §6,
 /// §9.2) are this app's own additions on top of that base.
 ///
-/// `.top` keeps using IslandGeometry's own notch/capsule-aware sizing and frame (notch fusion has
-/// no equivalent on the other three edges); `.bottom`/`.left`/`.right` use the much simpler
-/// DockPlacement math. `windowFrame(for:)`/`contentOrigin(for:envelopeSize:)` are the two places
+/// `.top` keeps using IslandGeometry's own frame (notch fusion — hanging flush under a real
+/// camera — has no equivalent on the other three edges, and only matters on `.top` even there);
+/// `.bottom`/`.left`/`.right` use the much simpler DockPlacement math.
+/// `windowFrame(for:)`/`contentOrigin(for:envelopeSize:)` are the two places
 /// that branch on the current edge — everything else (the envelope-then-settle resize itself,
 /// silhouette animation, content reveal timing) is shared and edge-agnostic, unchanged from before
 /// this task, per the task's own "keep the existing expand and collapse transitions working as
@@ -206,9 +207,8 @@ final class NotchPanel: NSPanel {
         logger.info("NotchPanel created. frame=\(NSStringFromRect(self.frame), privacy: .public) edge=\(self.edge.rawValue, privacy: .public)")
         silhouette.setFillColor(currentSilhouetteFillColor())
         // Give the silhouette an initial path immediately — otherwise it stays empty (zero
-        // frame) until the first expand/collapse transition ever runs. Only .top ever floats as
-        // a capsule with a gap; the other three edges are always flush-docked pills.
-        let initialGap = edge == .top ? initialGeometry.floatingGap : nil
+        // frame) until the first expand/collapse transition ever runs.
+        let initialGap = Self.collapsedGap(edge: edge, geometry: initialGeometry)
         silhouette.resize(
             to: currentSize, from: currentSize,
             startGap: initialGap, targetGap: initialGap,
@@ -572,15 +572,28 @@ final class NotchPanel: NSPanel {
         )
         return IslandGeometry(
             screen: screen.frame, safeAreaTop: screen.safeAreaInsets.top, cameraWidth: cameraWidth,
-            menuBarHeight: menuBarHeight, silhouette: IslandSettings.silhouette, capsuleFit: IslandSettings.capsuleFit
+            menuBarHeight: menuBarHeight
         )
     }
 
-    /// `.top`'s own notch/capsule-aware collapsed size (IslandGeometry); every other edge is
-    /// just CollapsedPill's fixed 46x34/34x46 (design/DESIGN_GUIDE.md §3) — there's no camera or
-    /// menu-bar simulation to size around off the top edge.
+    /// Only a real physical camera notch hangs flush from the top edge, sized to its own housing
+    /// (IslandGeometry.collapsedSize) — every other case, on every edge including a non-notched
+    /// top dock, is always CollapsedPill's own plain circle at its configured diameter
+    /// (IslandSettings.pillDiameter). The two layers (this native silhouette's size and
+    /// CollapsedPill's own SwiftUI content) have to stay in exact lockstep; the "notch" silhouette
+    /// simulating a wide cutout here used to produce a visibly different (and differently shaped)
+    /// background behind the always-circular SwiftUI pill — owner feedback, not a guess.
     private static func collapsedSize(for edge: DockEdge, geometry: IslandGeometry) -> CGSize {
-        edge == .top ? geometry.collapsedSize : DockPlacement.collapsedPillSize(for: edge)
+        (edge == .top && geometry.isNotched) ? geometry.collapsedSize : DockPlacement.collapsedPillSize(for: edge, diameter: IslandSettings.pillDiameter)
+    }
+
+    /// The native silhouette's own shape inset for the *collapsed* pill — non-nil (a full circle,
+    /// not NotchSilhouetteView's "card" radius) on every edge except a real top-edge camera
+    /// notch, which hangs flush instead (IslandGeometry.floatingGap is already nil there). Left/
+    /// right/bottom never had an equivalent of IslandGeometry's own notch detection, so they
+    /// always get the same small flat inset regardless of what the display reports.
+    private static func collapsedGap(edge: DockEdge, geometry: IslandGeometry) -> CGFloat? {
+        edge == .top ? geometry.floatingGap : DockPlacement.collapsedPillInset
     }
 
     /// ExpandedCard's own fixed size, capped against the real screen's bounds for safety on a
@@ -681,12 +694,9 @@ final class NotchPanel: NSPanel {
         // the top-left" before snapping to its real position a frame later.
         hosting.layoutSubtreeIfNeeded()
 
-        // The capsule's rounded-pill shape only ever belongs to the small collapsed indicator —
-        // the wide expanded card is always a plain rounded rectangle (gap nil), regardless of
-        // which silhouette is chosen for the collapsed state. Only .top ever has a floating gap
-        // at all (bottom/left/right are always flush-docked pills).
-        let floatingGap = edge == .top ? geometry.floatingGap : nil
-        let targetGap = expanded ? nil : floatingGap
+        // The pill's full-circle shape only ever belongs to the small collapsed indicator — the
+        // wide expanded card is always a plain rounded rectangle (gap nil).
+        let targetGap = expanded ? nil : Self.collapsedGap(edge: edge, geometry: geometry)
 
         // The native backdrop only ever matters for the *static*, at-rest silhouette (the shape
         // both CollapsedPill and ExpandedCard already draw their own complete background and
@@ -761,8 +771,7 @@ final class NotchPanel: NSPanel {
         let restEnvelope = Self.restingEnvelopeSize(for: target, edge: edge)
         setFrame(windowFrame(for: restEnvelope), display: true)
         layoutContent(for: target, envelopeSize: restEnvelope)
-        let floatingGap = edge == .top ? geometry.floatingGap : nil
-        let gap = expanded ? nil : floatingGap
+        let gap = expanded ? nil : Self.collapsedGap(edge: edge, geometry: geometry)
         silhouette.resize(to: target, from: target, startGap: gap, targetGap: gap, envelopeSize: restEnvelope, reduceMotion: true, completion: {})
     }
 

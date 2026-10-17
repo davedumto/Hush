@@ -5,19 +5,20 @@ import SwiftUI
 /// Purely a function of `variant` (PillVariant.resolve) plus local hover state for the scale-up
 /// spring; never branches on raw profile/connection/battery facts itself.
 ///
-/// Renders at a fixed size (DockPlacement.collapsedPillDiameter, the same on every edge) regardless
-/// of whatever frame it's placed in — NotchView centers it inside `collapsedSize`, the surrounding
-/// app's own adaptive capsule/notch sizing (IslandGeometry), which doesn't currently always equal
-/// that diameter on every display. The pill's own shape/fill/border/shadow are self-drawn (unlike
-/// NotchView's other content, which never draws its own background — see its doc comment): the
-/// native NotchSilhouetteView underneath is a fixed, always-black fill with no theme awareness, so
-/// it can't produce the light theme's white pill or the per-condition border/glow on its own.
-/// Because of that split, the pill's own shadow/glow can be clipped by the window's current
-/// zero-margin framing at rest (NotchPanel has no reserved shadow margin for the collapsed size) —
-/// a known limitation, out of scope for this task alongside the window-geometry work it would take
-/// to fix.
+/// Renders at `diameter` (IslandSettings.pillDiameter, user-adjustable; the same on every edge)
+/// regardless of whatever frame it's placed in — NotchView centers it inside `collapsedSize`,
+/// which NotchPanel.collapsedSize(for:geometry:) keeps in exact lockstep with this same diameter
+/// (the one exception, a real camera notch, hangs flush and sized to its own housing instead —
+/// see that function's own doc comment). The pill's own shape/fill/border/shadow are self-drawn
+/// (unlike NotchView's other content, which never draws its own background — see its doc
+/// comment): the native NotchSilhouetteView underneath is a fixed, always-black fill with no
+/// theme awareness, so it can't produce the light theme's white pill or the per-condition
+/// border/glow on its own.
 struct CollapsedPill: View {
     let variant: PillVariant
+    /// User-adjustable (IslandSettings.pillDiameter) — defaults to the designed size so every
+    /// preview/caller that doesn't pass one explicitly keeps rendering at today's exact size.
+    var diameter: CGFloat = DockPlacement.collapsedPillDiameter
     /// §9.1 point 5 "Photo flight": shared with ExpandedCard's own hero photo by NotchView, the
     /// common ancestor that owns the `@Namespace` — see ExpandedCard.photoNamespace's own doc
     /// comment for why this defaults to `nil` everywhere except NotchView itself.
@@ -28,8 +29,12 @@ struct CollapsedPill: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var size: CGSize {
-        CGSize(width: DockPlacement.collapsedPillDiameter, height: DockPlacement.collapsedPillDiameter)
+        CGSize(width: diameter, height: diameter)
     }
+    /// Every inner content size below is expressed relative to the *designed* diameter (52) and
+    /// scaled by this factor, so a bigger pill keeps today's exact proportions instead of a
+    /// fixed-size icon/battery indicator looking lost inside a larger circle.
+    private var scale: CGFloat { diameter / DockPlacement.collapsedPillDiameter }
     private var isLowBattery: Bool {
         if case .bar(_, let isLow) = variant.battery { return isLow }
         return false
@@ -58,7 +63,9 @@ struct CollapsedPill: View {
     @ViewBuilder
     private var shape: some View {
         let fillColor = variant.dock.isNotch ? Theme.Brand.black : Theme.Semantic.pillBackground
-        let borderColor = variant.theme == .dark ? Color.white.opacity(0.16) : Theme.Brand.deepNavy.opacity(0.08)
+        // Orange at every battery level now, not just low — low battery still reads as distinct
+        // via full opacity and a thicker stroke rather than a different color entirely.
+        let borderColor = Theme.Brand.orange.opacity(0.5)
 
         // A plain circle, the same for every dock including the notch-fused one — no more of §3's
         // "square top corners" distinction (that was specifically to read as flush with a
@@ -92,7 +99,7 @@ struct CollapsedPill: View {
         } else {
             // One layout for every dock now that the pill itself is a circle with no long axis —
             // icon above the battery indicator, same as the old vertical-dock arrangement.
-            VStack(spacing: 4) { primaryVisual; batteryIndicator }
+            VStack(spacing: 4 * scale) { primaryVisual; batteryIndicator }
         }
     }
 
@@ -103,7 +110,7 @@ struct CollapsedPill: View {
             Image(assetName)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(height: 26)
+                .frame(height: 26 * scale)
                 .opacity(variant.photoOpacity)
                 .saturation(variant.photoOpacity < 1 ? 0 : 1) // connecting: desaturated, not just faded
                 // §9.1 point 5: flies/grows into ExpandedCard's hero photo on expand — see that
@@ -115,7 +122,7 @@ struct CollapsedPill: View {
     }
 
     private func markView(dotOpacity: Double) -> some View {
-        let markSize: CGFloat = 20
+        let markSize: CGFloat = 20 * scale
         return ZStack {
             Image("HushArchTemplate")
                 .renderingMode(.template)
@@ -154,7 +161,7 @@ struct CollapsedPill: View {
                 .stroke(Theme.Brand.orange, style: StrokeStyle(lineWidth: 1.7, lineCap: .round))
                 .rotationEffect(.degrees(spinnerRotation))
         }
-        .frame(width: 10, height: 10)
+        .frame(width: 10 * scale, height: 10 * scale)
         .onAppear {
             withAnimation(
                 .linear(duration: MotionConstants.connectingSpinnerRevolution).repeatForever(autoreverses: false)
@@ -166,7 +173,7 @@ struct CollapsedPill: View {
         let fraction = max(0, min(1, Double(percent) / 100))
         // One horizontal track for every dock, under the icon in the VStack above — same reason
         // `contentView` dropped its own isVertical branch.
-        let trackSize = CGSize(width: 22, height: 3)
+        let trackSize = CGSize(width: 22 * scale, height: 3 * scale)
 
         return ZStack(alignment: .leading) {
             RoundedRectangle(cornerRadius: 2, style: .continuous)

@@ -9,7 +9,7 @@ final class DockPlacementTests: XCTestCase {
     // MARK: - Edge geometry (bottom/left/right — .top stays IslandGeometry's own job)
 
     func testBottomPillSitsAboveTheVisibleFrameBottom() {
-        let size = DockPlacement.collapsedPillSize(for: .bottom)
+        let size = DockPlacement.collapsedPillSize(for: .bottom, diameter: DockPlacement.collapsedPillDiameter)
         let frame = DockPlacement.frame(for: size, edge: .bottom, offset: 0, visibleFrame: visibleFrame, margin: DockPlacement.edgeMargin(for: .bottom))
         XCTAssertEqual(frame.minY, visibleFrame.minY + 12)
         XCTAssertEqual(frame.midX, visibleFrame.midX)
@@ -17,7 +17,7 @@ final class DockPlacementTests: XCTestCase {
     }
 
     func testLeftPillSitsTenPointsFromTheLeftEdgeVerticallyCentered() {
-        let size = DockPlacement.collapsedPillSize(for: .left)
+        let size = DockPlacement.collapsedPillSize(for: .left, diameter: DockPlacement.collapsedPillDiameter)
         let frame = DockPlacement.frame(for: size, edge: .left, offset: 0, visibleFrame: visibleFrame, margin: DockPlacement.edgeMargin(for: .left))
         XCTAssertEqual(frame.minX, visibleFrame.minX + 10)
         XCTAssertEqual(frame.midY, visibleFrame.midY)
@@ -29,7 +29,7 @@ final class DockPlacementTests: XCTestCase {
         // CollapsedPill's own doc comment / CLAUDE.md) — there's no long axis left to vary by
         // edge, which is also what fixed the old flex/stack background mismatch when switching
         // between a horizontal and a vertical dock.
-        let sizes = DockEdge.allCases.map { DockPlacement.collapsedPillSize(for: $0) }
+        let sizes = DockEdge.allCases.map { DockPlacement.collapsedPillSize(for: $0, diameter: DockPlacement.collapsedPillDiameter) }
         for size in sizes {
             XCTAssertEqual(size.width, size.height)
             XCTAssertEqual(size, sizes[0])
@@ -37,14 +37,14 @@ final class DockPlacementTests: XCTestCase {
     }
 
     func testRightPillMirrorsLeft() {
-        let size = DockPlacement.collapsedPillSize(for: .right)
+        let size = DockPlacement.collapsedPillSize(for: .right, diameter: DockPlacement.collapsedPillDiameter)
         let frame = DockPlacement.frame(for: size, edge: .right, offset: 0, visibleFrame: visibleFrame, margin: DockPlacement.edgeMargin(for: .right))
         XCTAssertEqual(frame.maxX, visibleFrame.maxX - 10)
         XCTAssertEqual(frame.midY, visibleFrame.midY)
     }
 
     func testOffsetShiftsAlongTheEdgeNotAwayFromIt() {
-        let size = DockPlacement.collapsedPillSize(for: .bottom)
+        let size = DockPlacement.collapsedPillSize(for: .bottom, diameter: DockPlacement.collapsedPillDiameter)
         let frame = DockPlacement.frame(for: size, edge: .bottom, offset: 100, visibleFrame: visibleFrame, margin: 12)
         XCTAssertEqual(frame.midX, visibleFrame.midX + 100)
         XCTAssertEqual(frame.minY, visibleFrame.minY + 12) // distance from the edge is unaffected
@@ -53,7 +53,7 @@ final class DockPlacementTests: XCTestCase {
     func testCardGrowsAwayFromTheDockedEdge() {
         // Bottom: the pill's bottom edge and the card's bottom edge line up (both anchored to the
         // same visibleFrame.minY + margin); the card just extends further upward.
-        let pill = DockPlacement.frame(for: DockPlacement.collapsedPillSize(for: .bottom), edge: .bottom, offset: 0, visibleFrame: visibleFrame, margin: 12)
+        let pill = DockPlacement.frame(for: DockPlacement.collapsedPillSize(for: .bottom, diameter: DockPlacement.collapsedPillDiameter), edge: .bottom, offset: 0, visibleFrame: visibleFrame, margin: 12)
         let card = DockPlacement.frame(for: CGSize(width: 374, height: 470), edge: .bottom, offset: 0, visibleFrame: visibleFrame, margin: 12)
         XCTAssertEqual(pill.minY, card.minY)
         XCTAssertGreaterThan(card.maxY, pill.maxY)
@@ -78,7 +78,7 @@ final class DockPlacementTests: XCTestCase {
     // MARK: - clampedOffset (collapsed + expanded together)
 
     func testClampedOffsetKeepsBothCollapsedAndExpandedInsideTheVisibleFrame() {
-        let collapsed = DockPlacement.collapsedPillSize(for: .bottom)
+        let collapsed = DockPlacement.collapsedPillSize(for: .bottom, diameter: DockPlacement.collapsedPillDiameter)
         let expanded = CGSize(width: 374, height: 470)
         // Try to drag way off to the right — should clamp, not pass through unchanged.
         let clamped = DockPlacement.clampedOffset(10_000, collapsedSize: collapsed, expandedSize: expanded, edge: .bottom, visibleFrame: visibleFrame)
@@ -87,7 +87,7 @@ final class DockPlacementTests: XCTestCase {
     }
 
     func testClampedOffsetLeavesAnInRangeValueUnchanged() {
-        let collapsed = DockPlacement.collapsedPillSize(for: .left)
+        let collapsed = DockPlacement.collapsedPillSize(for: .left, diameter: DockPlacement.collapsedPillDiameter)
         let expanded = CGSize(width: 296, height: 470)
         let clamped = DockPlacement.clampedOffset(20, collapsedSize: collapsed, expandedSize: expanded, edge: .left, visibleFrame: visibleFrame)
         XCTAssertEqual(clamped, 20)
@@ -97,7 +97,7 @@ final class DockPlacementTests: XCTestCase {
         // The expanded card is far bigger than the collapsed pill, so its own range should be the
         // binding constraint — the clamped value must respect the *card's* bounds, not the pill's
         // looser ones.
-        let collapsed = DockPlacement.collapsedPillSize(for: .bottom)
+        let collapsed = DockPlacement.collapsedPillSize(for: .bottom, diameter: DockPlacement.collapsedPillDiameter)
         let expanded = CGSize(width: 374, height: 470)
         let pillOnlyRange = try! XCTUnwrap(DockPlacement.offsetRange(forSize: collapsed, edge: .bottom, visibleFrame: visibleFrame, margin: 8))
         let clamped = DockPlacement.clampedOffset(pillOnlyRange.upperBound, collapsedSize: collapsed, expandedSize: expanded, edge: .bottom, visibleFrame: visibleFrame)

@@ -22,23 +22,32 @@ enum DockPlacement {
         edge == .bottom ? 12 : 10
     }
 
-    /// CollapsedPill's own fixed diameter — a circle, the same size on every edge, deliberately
+    /// CollapsedPill's own default diameter — a circle, the same size on every edge, deliberately
     /// deviating from design/DESIGN_GUIDE.md §3's own elongated 46x34/34x46 pill (CLAUDE.md
     /// records this one too). Being edge-independent isn't just cosmetic: the old size *and*
     /// shape both depended on `edge.isVertical`, and CollapsedPill's own content layout (an HStack
     /// for horizontal docks, a VStack for vertical ones) depended on it too — switching edges
     /// without something to force a re-render left the old layout's background visibly showing
     /// through the new one for a moment. A circle has no long axis, so there's nothing left for
-    /// edge to change here at all.
+    /// edge to change here at all. User-adjustable now (IslandSettings.pillDiameter) — this is
+    /// just the fallback for an unset default.
     static let collapsedPillDiameter: CGFloat = 52
+    static let pillDiameterRange: ClosedRange<CGFloat> = 40...100
 
-    /// CollapsedPill's own fixed size — mirrored here, not read from CollapsedPill itself, since
-    /// that's a SwiftUI view and this module stays framework-free. Keeps the `for edge:` signature
+    /// CollapsedPill's own size — mirrored here, not read from CollapsedPill itself, since that's
+    /// a SwiftUI view and this module stays framework-free. Keeps the `for edge:` signature
     /// callers already use even though a circle no longer actually varies by edge.
-    static func collapsedPillSize(for edge: DockEdge) -> CGSize {
+    static func collapsedPillSize(for edge: DockEdge, diameter: CGFloat) -> CGSize {
         _ = edge
-        return CGSize(width: collapsedPillDiameter, height: collapsedPillDiameter)
+        return CGSize(width: diameter, height: diameter)
     }
+
+    /// How far the native silhouette's drawn circle insets from the collapsed pill's own frame on
+    /// bottom/left/right — small enough that CollapsedPill's own full-size SwiftUI circle (no
+    /// inset of its own) fully covers it, matching IslandGeometry.floatingGap's own default for
+    /// the top edge (there, it floats a notched display's safe-area camera-height detection; here
+    /// there's no such thing to measure, so this is just that same small default, flat).
+    static let collapsedPillInset: CGFloat = 4
 
     /// The frame for `size` docked to `edge`, offset by `offset` points from the middle of the
     /// edge (positive = right for top/bottom, down for left/right), using `visibleFrame` so a

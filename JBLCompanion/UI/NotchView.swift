@@ -198,7 +198,7 @@ struct NotchView: View {
     @ViewBuilder
     private var collapsedContent: some View {
         let size = collapsedSize()
-        CollapsedPill(variant: pillVariant, photoNamespace: pillPhotoNamespace)
+        CollapsedPill(variant: pillVariant, diameter: IslandSettings.pillDiameter, photoNamespace: pillPhotoNamespace)
             .frame(width: size.width, height: size.height)
     }
 

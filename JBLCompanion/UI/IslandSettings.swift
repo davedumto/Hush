@@ -2,17 +2,12 @@ import CoreGraphics
 import Foundation
 
 /// Reads/writes every user-adjustable geometry setting in one place. Each typed accessor clamps
-/// through IslandCapsuleFit's own initializer, so a hand-edited or stale UserDefaults value
-/// always comes back in range — mirrors vorssaint-utils's approach of clamping in the type's
-/// init rather than at each call site.
+/// to its own valid range, so a hand-edited or stale UserDefaults value always comes back usable.
 enum IslandSettings {
     /// Internal (not private) so SwiftUI call sites can bind @AppStorage directly to these same
     /// keys instead of duplicating the string literals.
     enum Key {
-        static let silhouette = "islandSilhouette"
-        static let capsuleFitWidth = "islandCapsuleFitWidth"
-        static let capsuleFitHeight = "islandCapsuleFitHeight"
-        static let capsuleFitDrop = "islandCapsuleFitDrop"
+        static let pillDiameter = "islandPillDiameter"
         static let chosenDisplayUUID = "islandChosenDisplayUUID"
         static let autoExpandOnConnect = "islandAutoExpandOnConnect"
         /// Per-display edge is stored under one key per display UUID, not a single shared key —
@@ -24,26 +19,17 @@ enum IslandSettings {
         static func dockOffset(forDisplayUUID uuid: String, edge: DockEdge) -> String { "islandDockOffset.\(uuid).\(edge.rawValue)" }
     }
 
-    static var silhouette: IslandSilhouette {
-        get { IslandSilhouette(rawValue: UserDefaults.standard.string(forKey: Key.silhouette) ?? "") ?? .capsule }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.silhouette) }
-    }
-
-    static var capsuleFit: IslandCapsuleFit {
+    /// The collapsed pill's own diameter — a circle, the same on every edge. 0 (UserDefaults'
+    /// default for an unset key) falls back to DockPlacement's own default rather than clamping
+    /// down to the range's floor, so a user who's never touched this setting gets the designed
+    /// default (52), not 40.
+    static var pillDiameter: CGFloat {
         get {
-            let defaults = UserDefaults.standard
-            return IslandCapsuleFit(
-                width: defaults.double(forKey: Key.capsuleFitWidth),
-                height: defaults.double(forKey: Key.capsuleFitHeight),
-                drop: defaults.double(forKey: Key.capsuleFitDrop)
-            )
+            let stored = UserDefaults.standard.double(forKey: Key.pillDiameter)
+            guard stored != 0 else { return DockPlacement.collapsedPillDiameter }
+            return min(DockPlacement.pillDiameterRange.upperBound, max(DockPlacement.pillDiameterRange.lowerBound, stored))
         }
-        set {
-            let defaults = UserDefaults.standard
-            defaults.set(Double(newValue.width), forKey: Key.capsuleFitWidth)
-            defaults.set(Double(newValue.height), forKey: Key.capsuleFitHeight)
-            defaults.set(Double(newValue.drop), forKey: Key.capsuleFitDrop)
-        }
+        set { UserDefaults.standard.set(Double(newValue), forKey: Key.pillDiameter) }
     }
 
     /// nil means "automatic" — the display currently hosting the menu bar.
