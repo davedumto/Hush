@@ -18,9 +18,14 @@ enum IslandShape {
     }
 
     /// The modest corner radius a card uses (the expanded state, or a flush/notch-style
-    /// collapsed shape) — never a full pill, regardless of how wide the card is.
+    /// collapsed shape) — never a full pill, regardless of how wide the card is. Must match
+    /// ExpandedCard's own `cornerRadius: 33` exactly, not just approximately: this is the native
+    /// backdrop drawn *underneath* that SwiftUI shape, and any smaller radius here leaves its own
+    /// flatter corner sticking out past the SwiftUI card's tighter curve — visible as the
+    /// backdrop's fill color (and, with the card's own border restored, the orange border sitting
+    /// "inside" a visible sliver of it) right at the corners.
     static func cardRadius(height: CGFloat) -> CGFloat {
-        min(28, height * 0.34)
+        min(33, height * 0.34)
     }
 
     /// The full-pill radius a floating capsule uses at rest.
