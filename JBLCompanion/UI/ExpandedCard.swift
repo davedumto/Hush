@@ -34,8 +34,13 @@ struct ExpandedCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var isVertical: Bool { dock.isVertical }
+    // design/DESIGN_GUIDE.md §4: "Height follows content, about 470" — not exactly 470. Summing
+    // every element (top row 28 + hero 236 + name block ~56 + mode buttons/status ~91 + footer
+    // ~25, plus 28 of panel padding and 14 of outer frame padding) comes to ~478, already over a
+    // flat 470 before accounting for any font-metric slack — that's real, measured overflow, not
+    // a guess. 500 gives genuine headroom instead of a number that was never actually enough.
     private var cardSize: CGSize {
-        isVertical ? CGSize(width: 296, height: 470) : CGSize(width: 374, height: 470)
+        isVertical ? CGSize(width: 296, height: 500) : CGSize(width: 374, height: 500)
     }
     private var heroHeight: CGFloat { isVertical ? 196 : 236 }
     private var photoHeight: CGFloat { isVertical ? 168 : 206 }
@@ -124,7 +129,7 @@ struct ExpandedCard: View {
         .background(panelGradient, in: RoundedRectangle(cornerRadius: 27, style: .continuous))
         .padding(7)
         // §9.5 "Connecting to connected"/"Connected to disconnected": a plain crossfade across
-        // whichever parts of the card just changed. The card's own height is fixed (470
+        // whichever parts of the card just changed. The card's own height is fixed (cardSize,
         // regardless of condition — see NotchPanel's own doc comment on why that's deliberate),
         // so there's no height change left for the guide's "collapse spring" to actually animate.
         .animation(reduceMotion ? .easeInOut(duration: 0.16) : .easeOut(duration: 0.3), value: condition)

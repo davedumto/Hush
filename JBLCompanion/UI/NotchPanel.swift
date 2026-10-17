@@ -103,12 +103,15 @@ final class NotchPanel: NSPanel {
     }
 
     /// ExpandedCard's own fixed size (design/DESIGN_GUIDE.md §4/§10) — a real constant, not a
-    /// measurement: ExpandedCard's height of 470 is fixed regardless of what it's showing (or
-    /// which dock it's on; only the width differs, horizontal vs. vertical docks), so there's
-    /// nothing to measure. See the git history for why measuring it anyway (the original approach
-    /// here, before ExpandedCard had a fixed size) was actively wrong, not just redundant.
-    private static let expandedCardSize = CGSize(width: 374, height: 470)
-    private static let expandedCardSizeVertical = CGSize(width: 296, height: 470)
+    /// measurement, and must stay in lockstep with ExpandedCard.cardSize (same reasoning there for
+    /// why 500, not a flat 470 — the guide's own "about 470" already allows it, and content
+    /// measured out to ~478 against a flat 470). Height is fixed regardless of what the card is
+    /// showing (or which dock it's on; only the width differs, horizontal vs. vertical docks), so
+    /// there's nothing to measure here. See the git history for why measuring it anyway (the
+    /// original approach here, before ExpandedCard had a fixed size) was actively wrong, not just
+    /// redundant.
+    private static let expandedCardSize = CGSize(width: 374, height: 500)
+    private static let expandedCardSizeVertical = CGSize(width: 296, height: 500)
 
     init(
         headphoneState: HeadphoneState, onSelectNoiseMode: @escaping (CommandableNoiseMode) -> Void,
@@ -171,12 +174,17 @@ final class NotchPanel: NSPanel {
         // the same origin math below) — the surrounding `container` is the one sized to the
         // margined envelope, so CollapsedPill/ExpandedCard's own shadows have real window room to
         // bleed into. masksToBounds stays off deliberately: it would clip that intentional
-        // overflow right back off, same as it would an oversized estimate.
+        // overflow right back off, same as it would an oversized estimate. Set explicitly, not
+        // left to CALayer's own default — this is the one thing standing between a correctly
+        // sized/positioned content frame (the window and hosting-frame math are each independently
+        // verified) and that content actually being visible at full size.
         hosting.wantsLayer = true
+        hosting.layer?.masksToBounds = false
 
         let initialEnvelope = Self.restingEnvelopeSize(for: currentSize, edge: edge)
         let container = NSView(frame: NSRect(origin: .zero, size: initialEnvelope))
         container.wantsLayer = true
+        container.layer?.masksToBounds = false
         container.addSubview(silhouette)
         container.addSubview(hosting)
         contentView = container
@@ -189,7 +197,7 @@ final class NotchPanel: NSPanel {
         setFrame(windowFrame(for: initialEnvelope), display: false)
         logger.info("NotchPanel created. frame=\(NSStringFromRect(self.frame), privacy: .public) edge=\(self.edge.rawValue, privacy: .public)")
         silhouette.setFillColor(currentSilhouetteFillColor())
-        silhouette.setEdgeVisible(false) // starts collapsed, no orange outline until expanded.
+        silhouette.setEdgeVisible(false) // starts collapsed — no orange outline until expanded.
         // Give the silhouette an initial path immediately — otherwise it stays empty (zero
         // frame) until the first expand/collapse transition ever runs. Only .top ever floats as
         // a capsule with a gap; the other three edges are always flush-docked pills.
@@ -608,13 +616,17 @@ final class NotchPanel: NSPanel {
         // for most of the animation (SwiftUI content stays hidden until revealContent), so it
         // has to already be correct, not just end up correct once the real content fades in.
         silhouette.setFillColor(currentSilhouetteFillColor())
-        // The orange outline is card-only, visible for the whole expand swing, gone for the
+        // The orange outline is card-only — visible for the whole expand swing, gone for the
         // whole collapse swing, not just once each settles.
         silhouette.setEdgeVisible(expanded)
 
-        // 1. Make the window big enough for the whole swing, then center both views within it.
+        // 1. Make the window big enough for the whole swing, then place both views within it.
+        // Content is sized to its real TARGET dimensions immediately, not to the old/small
+        // `start` size — it's invisible either way (hosting.alphaValue = 0 above, until
+        // revealContent), so there's no reason to size it for a state it's about to leave; doing
+        // so only left a second, avoidable resize for the completion handler below to perform.
         setFrame(windowFrame(for: envelope), display: true)
-        layoutContent(for: start, envelopeSize: envelope)
+        layoutContent(for: target, envelopeSize: envelope)
 
         // The capsule's rounded-pill shape only ever belongs to the small collapsed indicator —
         // the wide expanded card is always a plain rounded rectangle (gap nil), regardless of
