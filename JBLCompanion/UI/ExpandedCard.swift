@@ -24,7 +24,12 @@ struct ExpandedCard<ModeControls: View>: View {
     private var photoHeight: CGFloat { isVertical ? 168 : 206 }
     private var modelNumberFontSize: CGFloat { isVertical ? 112 : 150 }
     private var tabLengthAlongEdge: CGFloat { isVertical ? 92 : 116 }
-    private var tabDepthIntoPanel: CGFloat { isVertical ? 22 : 24 }
+    // Floored at CutoutTabShape's outerCornerRadius (18): canonicalTopPath's straight wall
+    // segment length is depthIntoPanel - outerCornerRadius, so going lower makes that segment
+    // negative and breaks the fillet/corner geometry (the "overlapping circles" bug from before).
+    // At 18, the wall length is exactly 0 — the fillet and outer corner meet directly, which is
+    // the shallowest the tab can get without touching the guide's own radius tokens.
+    private var tabDepthIntoPanel: CGFloat { 18 }
 
     private var content: ExpandedCardContent {
         ExpandedCardContent.resolve(connection: state.connection, batteryPercent: state.batteryPercent)
