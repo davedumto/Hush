@@ -270,6 +270,10 @@ struct ExpandedCard<ModeControls: View>: View {
                     startPoint: .top, endPoint: .bottom
                 )
             )
+            // Light theme's number is solid white (§8), unlike dark theme's own naturally-subtle
+            // navy-on-navy gradient — without this, the edges exposed past the (also white, in
+            // light theme) photo read as a flat competing blob rather than a layered watermark.
+            .shadow(color: Theme.Brand.black.opacity(colorScheme == .dark ? 0 : 0.14), radius: 6, x: 0, y: 3)
             .opacity(state.modelNumberText.isEmpty ? 0 : 1)
             .lineLimit(1)
             .minimumScaleFactor(0.5)
@@ -327,17 +331,25 @@ struct ExpandedCard<ModeControls: View>: View {
     @State private var lowBatteryPulse = false
 
     private func batteryChipBody(eyebrow: String, value: String, fraction: Double, isLow: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        // Low battery's chip is solid BrandOrange in both themes, so white ink always has plenty
+        // of contrast there. The normal GlassFill chip is a different story: in light theme its
+        // translucent-white fill sits over an already-brighter panel and reads pale, not dark, so
+        // white text loses contrast against it — dark navy ink is what the chip actually needs
+        // there, same reasoning as ChipInk for the model chip.
+        let valueColor: Color = isLow ? .white : (colorScheme == .dark ? .white : Theme.Brand.navy)
+        let eyebrowColor: Color = isLow ? .white.opacity(0.85) : (colorScheme == .dark ? Theme.Semantic.textSecondary.opacity(0.8) : Theme.Brand.navy.opacity(0.6))
+
+        return VStack(alignment: .leading, spacing: 3) {
             Text(eyebrow)
                 .font(Theme.Fonts.eyebrow)
                 .tracking(1.5)
-                .foregroundStyle((isLow ? Color.white : Theme.Semantic.textSecondary).opacity(0.8))
+                .foregroundStyle(eyebrowColor)
             Text(value)
                 .font(Theme.Fonts.batteryValue)
-                .foregroundStyle(.white)
+                .foregroundStyle(valueColor)
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(isLow ? Color.black.opacity(0.25) : Color.white.opacity(0.18))
+                    .fill(isLow ? Color.black.opacity(0.25) : (colorScheme == .dark ? Color.white.opacity(0.18) : Theme.Brand.navy.opacity(0.18)))
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
                     .fill(isLow ? Color.white : Theme.Brand.orange)
                     .frame(width: max(0, min(1, fraction)) * 52)
