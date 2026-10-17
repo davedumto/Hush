@@ -29,6 +29,11 @@ struct ExpandedCard: View {
     /// Read from UserDefaults by the caller (AppDelegate persists it on every successful match);
     /// this view stays a pure function of its inputs, no UserDefaults access of its own.
     let lastMatchedProfileDisplayName: String?
+    /// §9.1 point 5 "Photo flight": shared with CollapsedPill's own photo image by NotchView, the
+    /// common ancestor that owns the `@Namespace`. `nil` for every preview/caller that doesn't
+    /// need the flight (most of them — matchedGeometryEffect only does anything useful when both
+    /// the pill and the card are mounted in the same transition, which only NotchView arranges).
+    var photoNamespace: Namespace.ID? = nil
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -399,6 +404,10 @@ struct ExpandedCard: View {
                 // §5 "Connecting": "photo at 30% and fully desaturated".
                 .opacity(isConnecting ? 0.3 : 1)
                 .saturation(isConnecting ? 0 : 1)
+                // §9.1 point 5: the small pill photo flies and grows into this hero photo, sharing
+                // this id/namespace with CollapsedPill's own photo image — skipped under Reduce
+                // Motion (§9.6: "No photo flight"), where the two photos just crossfade in place.
+                .modifier(PhotoFlight(namespace: reduceMotion ? nil : photoNamespace))
         } else if isNoDevice {
             // §5 "No headphones": "HushMark at 118 (side docks 92), arch white 32%, dot dimmed".
             markGlyph(

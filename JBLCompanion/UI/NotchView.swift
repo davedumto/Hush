@@ -98,6 +98,10 @@ struct NotchView: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// design/DESIGN_GUIDE.md §9.1 point 5 "Photo flight": owned by this common ancestor and
+    /// threaded into both CollapsedPill and ExpandedCard, so `matchedGeometryEffect` can morph the
+    /// pill's own photo into the hero photo across the expand/collapse transition below.
+    @Namespace private var photoFlight
 
     var body: some View {
         // A ZStack, not a plain Group — §9.1/§9.2 need the outgoing and incoming view to coexist
@@ -115,6 +119,17 @@ struct NotchView: View {
                     .transition(pillTransition)
             }
         }
+        // Explicit, not left to size itself off whichever children happen to be mounted: with no
+        // frame of its own, this ZStack's ideal size is just its *current* child's ideal size —
+        // the 46x34 pill's, right up until the instant the card is inserted alongside it, at
+        // which point the stack's own ideal size jumps to the card's in the very same transaction
+        // as the pill's own removal animation. Animating an alignment-positioned view's place
+        // across a container that is itself resizing underneath it, in that same beat, is exactly
+        // the kind of thing that reads as "renders in the wrong spot for a frame, then corrects" —
+        // pinning this to `.infinity` ties the stack's size to hosting's own externally-set AppKit
+        // frame instead (stable for the whole swing — see NotchPanel.present()'s own doc comment
+        // on `contentLayoutSize`), never to its children's union.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.clear)
     }
 
@@ -144,7 +159,7 @@ struct NotchView: View {
     @ViewBuilder
     private var collapsedContent: some View {
         let size = collapsedSize()
-        CollapsedPill(variant: pillVariant)
+        CollapsedPill(variant: pillVariant, photoNamespace: photoFlight)
             .frame(width: size.width, height: size.height)
     }
 
@@ -170,7 +185,7 @@ struct NotchView: View {
             state: state, dock: dockEdge().cardDock, onCollapseTapped: onCollapseTabTapped, isModeVerified: isModeVerified,
             supportsNoiseControl: supportsNoiseControl(), onSelectNoiseMode: onSelectNoiseMode,
             onReconnectTapped: onReconnectTapped, onOpenBluetoothSettingsTapped: onOpenBluetoothSettingsTapped,
-            lastMatchedProfileDisplayName: lastMatchedProfileDisplayName()
+            lastMatchedProfileDisplayName: lastMatchedProfileDisplayName(), photoNamespace: photoFlight
         )
     }
 }

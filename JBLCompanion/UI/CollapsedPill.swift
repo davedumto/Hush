@@ -17,6 +17,10 @@ import SwiftUI
 /// to fix.
 struct CollapsedPill: View {
     let variant: PillVariant
+    /// §9.1 point 5 "Photo flight": shared with ExpandedCard's own hero photo by NotchView, the
+    /// common ancestor that owns the `@Namespace` — see ExpandedCard.photoNamespace's own doc
+    /// comment for why this defaults to `nil` everywhere except NotchView itself.
+    var photoNamespace: Namespace.ID? = nil
     @State private var isHovering = false
     @State private var spinnerRotation: Double = 0
     @State private var lowBatteryPulse = false
@@ -118,6 +122,9 @@ struct CollapsedPill: View {
                 .frame(height: isVertical ? 22 : 26)
                 .opacity(variant.photoOpacity)
                 .saturation(variant.photoOpacity < 1 ? 0 : 1) // connecting: desaturated, not just faded
+                // §9.1 point 5: flies/grows into ExpandedCard's hero photo on expand — see that
+                // view's own doc comment on `photoNamespace`. Skipped under Reduce Motion (§9.6).
+                .modifier(PhotoFlight(namespace: reduceMotion ? nil : photoNamespace))
         case .genericMark, .noDevice:
             markView(dotOpacity: 1)
         }
