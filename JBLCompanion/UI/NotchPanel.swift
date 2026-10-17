@@ -598,7 +598,6 @@ final class NotchPanel: NSPanel {
         let generation = presentGeneration
 
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let envelope = IslandMotion.reservation(IslandMotion.envelope(from: currentSize, to: target), centring: target)
         let start = currentSize
         // Updated immediately (not just on completion) so a second present() call arriving before
         // this one finishes compares against where we're actually headed, not the stale
@@ -611,11 +610,6 @@ final class NotchPanel: NSPanel {
         // has to already show the right theme/color at that point, not the stale default.
         silhouette.setFillColor(currentSilhouetteFillColor())
 
-        // design/DESIGN_GUIDE.md §9.1 point 1 / §9.2 point 4 (MotionConstants.windowResizeOrdering):
-        // "window first" on the way in, "window last" on the way out. The window itself always
-        // grows to the envelope immediately, regardless of direction.
-        setFrame(windowFrame(for: envelope), display: true)
-
         // NotchView's own `.transition` now performs the actual visible pill<->card crossfade
         // (scale, opacity, blur) — see its own doc comment — so the SwiftUI content's AppKit-level
         // hosting frame has to already be big enough to hold *both* states for the whole swing,
@@ -626,6 +620,22 @@ final class NotchPanel: NSPanel {
         // here too: use whichever of (start, target) is the *expanded* one for the whole visible
         // swing, and only settle down to the true small target in the completion handler below.
         let contentLayoutSize = MotionConstants.windowResizeOrdering(forExpanding: expanded) == .growBeforeAnimating ? target : start
+
+        // design/DESIGN_GUIDE.md §9.1 point 1 / §9.2 point 4 (MotionConstants.windowResizeOrdering):
+        // "window first" on the way in, "window last" on the way out. The window always grows to
+        // an envelope that already fits `contentLayoutSize` (the larger of start/target, plus the
+        // same shadow margin the resting state uses) *immediately*, before any visible motion
+        // starts — not IslandMotion's old spring-overshoot reservation, sized only for `target`.
+        // That used to compute a *smaller* envelope than `contentLayoutSize` actually needs
+        // whenever a collapse's `contentLayoutSize` (the still-large outgoing card) was bigger
+        // than its own `target` (the small pill) — shrinking the window out from under the
+        // still-large, still-visible card the instant the swing began, instead of only once it
+        // settles. An expand's `contentLayoutSize` already equals `target`, so this envelope and
+        // the completion handler's own `restingEnvelopeSize` come out identical there and the
+        // window never needs to move at all mid-swing; a collapse's don't, which is exactly the
+        // shrink this envelope now correctly defers to the completion handler below.
+        let envelope = Self.restingEnvelopeSize(for: contentLayoutSize, edge: edge)
+        setFrame(windowFrame(for: envelope), display: true)
         layoutContent(for: contentLayoutSize, envelopeSize: envelope)
         // Forces AppKit to resolve that frame change — and SwiftUI's own layout pass inside
         // `hosting` to catch up with it — synchronously, right now, rather than on whatever the
