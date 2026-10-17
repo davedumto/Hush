@@ -103,16 +103,18 @@ struct ExpandedCard: View {
     // MARK: - Frame + panel
 
     private var frame: some View {
-        // design/DESIGN_GUIDE.md §4 "Frame and panel": CardFrame fill, corner radius 33, a shadow
-        // in light theme only — no border/stroke at all. An earlier "brand-accent edge" overlay
-        // here (and the native silhouette's matching edgeLayer underneath it) put a permanent
-        // orange outline around the whole card that neither the guide nor any reference image
-        // (01, 02, 05, 09, ...) actually shows — found comparing against them directly, removed.
+        // design/DESIGN_GUIDE.md §4 "Frame and panel": CardFrame fill, corner radius 33. The
+        // guide specifies a light-theme-only drop shadow here and no border at all; both are
+        // deliberately overridden on owner request (CLAUDE.md's deviations list) — the orange
+        // border alone separates the card from whatever's behind it, no shadow needed on top of
+        // it. Unlike an earlier version of this border, this is SwiftUI-only — no matching native
+        // silhouette edgeLayer — so it's absent for the brief window where only the native
+        // backdrop is visible (the collapse/expand swing itself), not the settled state.
         RoundedRectangle(cornerRadius: 33, style: .continuous)
             .fill(Theme.Semantic.cardFrame)
-            .shadow(
-                color: colorScheme == .dark ? .clear : Theme.Brand.black.opacity(0.6),
-                radius: 30, x: 0, y: 30
+            .overlay(
+                RoundedRectangle(cornerRadius: 33, style: .continuous)
+                    .strokeBorder(Theme.Brand.orange.opacity(0.9), lineWidth: 1.5)
             )
     }
 
