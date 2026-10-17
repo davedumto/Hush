@@ -94,11 +94,11 @@ final class NotchSilhouetteView: NSView {
         return self
     }
 
-    /// Set before a resize/reveal, never mid-animation — this native fill is what's actually
-    /// visible for most of the pill->card swing, since the SwiftUI content stays hidden
-    /// (`revealContent`) until the shape settles. Without matching it to the real theme ahead of
-    /// time, light theme's white card used to visibly flash black first (the stale default),
-    /// then "transition" to white once the SwiftUI content faded in.
+    /// Set before a resize, never mid-animation — this native fill is the backdrop the SwiftUI
+    /// content (CollapsedPill/ExpandedCard, both visible and animating throughout the swing — see
+    /// NotchView's own `.transition`) sits on top of for the whole pill<->card swing. Without
+    /// matching it to the real theme ahead of time, light theme's white card used to visibly flash
+    /// black first (the stale default), then "transition" to white once content caught up.
     func setFillColor(_ color: NSColor) {
         guard shapeLayer.fillColor != color.cgColor else { return }
         CATransaction.begin()

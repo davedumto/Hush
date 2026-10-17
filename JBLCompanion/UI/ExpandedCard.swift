@@ -29,6 +29,11 @@ struct ExpandedCard: View {
     /// Read from UserDefaults by the caller (AppDelegate persists it on every successful match);
     /// this view stays a pure function of its inputs, no UserDefaults access of its own.
     let lastMatchedProfileDisplayName: String?
+    /// §9.1 point 5 "Photo flight": shared with CollapsedPill's own photo image by NotchView, the
+    /// common ancestor that owns the `@Namespace`. `nil` for every preview/caller that doesn't
+    /// need the flight (most of them — matchedGeometryEffect only does anything useful when both
+    /// the pill and the card are mounted in the same transition, which only NotchView arranges).
+    var photoNamespace: Namespace.ID? = nil
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -116,11 +121,15 @@ struct ExpandedCard: View {
     private var panelContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             topRow
+                .modifier(StaggerIn(block: .topRow))
             heroSection
+                .modifier(StaggerIn(block: .hero))
             nameBlock
                 .padding(.top, 10)
+                .modifier(StaggerIn(block: .name))
             bottomSection
                 .padding(.top, 12)
+                .modifier(StaggerIn(block: .controls))
             footer
                 .padding(.top, 12)
         }
@@ -395,6 +404,10 @@ struct ExpandedCard: View {
                 // §5 "Connecting": "photo at 30% and fully desaturated".
                 .opacity(isConnecting ? 0.3 : 1)
                 .saturation(isConnecting ? 0 : 1)
+                // §9.1 point 5: the small pill photo flies and grows into this hero photo, sharing
+                // this id/namespace with CollapsedPill's own photo image — skipped under Reduce
+                // Motion (§9.6: "No photo flight"), where the two photos just crossfade in place.
+                .modifier(PhotoFlight(namespace: reduceMotion ? nil : photoNamespace))
         } else if isNoDevice {
             // §5 "No headphones": "HushMark at 118 (side docks 92), arch white 32%, dot dimmed".
             markGlyph(
@@ -494,10 +507,20 @@ struct ExpandedCard: View {
         // pulse starts" — the fill/border/ink swaps above are already driven by `isLow`, so a
         // single animation binding on it crossfades the whole chip together.
         .animation(reduceMotion ? .easeInOut(duration: 0.16) : .easeInOut(duration: 0.25), value: isLow)
-        .shadow(color: isLow ? Theme.Brand.orange.opacity(lowBatteryPulse ? 0.5 : 0) : .clear, radius: 11)
+        // §9.4 "Low battery chip": "Orange glow ring expands from 0 to 8 pt while fading from 50%
+        // to 0%" — an actual expanding ring, not a fixed-radius shadow pulse (a plain `.shadow`
+        // has no size to animate, only opacity/radius-of-blur, which isn't the same shape).
+        .overlay(
+            RoundedRectangle(cornerRadius: 15, style: .continuous)
+                .strokeBorder(Theme.Brand.orange, lineWidth: 1.5)
+                .padding(-(lowBatteryPulse ? MotionConstants.lowBatteryChipGlowMaxRadius : 0))
+                .opacity(isLow ? (lowBatteryPulse ? 0 : MotionConstants.lowBatteryChipGlowMaxOpacity) : 0)
+        )
         .onAppear {
             guard isLow, !reduceMotion else { return }
-            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { lowBatteryPulse = true }
+            withAnimation(
+                .easeInOut(duration: MotionConstants.lowBatteryChipGlowHalfCycle).repeatForever(autoreverses: true)
+            ) { lowBatteryPulse = true }
         }
     }
 
@@ -591,6 +614,34 @@ struct ExpandedCard: View {
                 .tracking(1.5)
                 .foregroundStyle(Theme.Semantic.textSecondary.opacity(0.8))
         }
+    }
+}
+
+/// §9.1 point 6: "each block fades in and rises 6 pt, ease out 260 ms," delayed from the start of
+/// the expand per `MotionConstants.staggerDelay(for:)`. §9.6: "No stagger" under Reduce Motion —
+/// the block just renders at its resting position/opacity immediately, letting the parent card's
+/// own 160 ms crossfade (NotchView) carry it instead.
+///
+/// Fires once per expand, not on every re-render: `.onAppear` only runs on genuine insertion into
+/// the view hierarchy, and ExpandedCard (and so every block inside it) is torn down on each
+/// collapse and rebuilt fresh on the next expand — never kept alive and merely re-evaluated while
+/// already showing, the same assumption the guide's own sample `StaggerIn` code makes.
+private struct StaggerIn: ViewModifier {
+    let block: MotionConstants.ContentBlock
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var shown = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(reduceMotion || shown ? 1 : 0)
+            .offset(y: reduceMotion || shown ? 0 : MotionConstants.staggerRiseDistance)
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(
+                    .easeOut(duration: MotionConstants.staggerDuration)
+                        .delay(MotionConstants.staggerDelay(for: block))
+                ) { shown = true }
+            }
     }
 }
 

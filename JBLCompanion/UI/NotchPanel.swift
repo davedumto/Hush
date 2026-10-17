@@ -83,7 +83,6 @@ final class NotchPanel: NSPanel {
     private var screenEdgeMonitors: [Any] = []
     private var screenEdgePressed = false
     private var autoCollapseWorkItem: DispatchWorkItem?
-    private var contentRevealWorkItem: DispatchWorkItem?
 
     /// Extra transparent room reserved, at rest, around both the pill and the card so their own
     /// shadows/glows (CollapsedPill, ExpandedCard — both reach past their own bounds) aren't
@@ -588,12 +587,9 @@ final class NotchPanel: NSPanel {
     // MARK: - Present (envelope-then-settle resize)
 
     private func present(expanded: Bool, completion: @escaping () -> Void = {}) {
-        uiState.isExpanded = expanded
         let target = expanded ? Self.expandedSize(for: edge, geometry: geometry) : Self.collapsedSize(for: edge, geometry: geometry)
         guard target != currentSize else {
-            // Nothing to animate — but make sure content is actually visible, in case an earlier,
-            // now-superseded transition left it hidden mid-fade.
-            hosting.animator().alphaValue = 1
+            uiState.isExpanded = expanded
             completion()
             return
         }
@@ -610,23 +606,31 @@ final class NotchPanel: NSPanel {
         // leave the window sized for the wrong state.
         currentSize = target
 
-        contentRevealWorkItem?.cancel()
-        hosting.alphaValue = 0
-        // Set before the swing starts, not after: the native fill is what's actually on screen
-        // for most of the animation (SwiftUI content stays hidden until revealContent), so it
-        // has to already be correct, not just end up correct once the real content fades in.
+        // Set before the swing starts, not after: the native fill is the backdrop both the
+        // outgoing and incoming SwiftUI views (NotchView's own transition, below) sit on top of
+        // for the whole swing, so it has to already be correct, not just end up correct once
+        // something else catches up.
         silhouette.setFillColor(currentSilhouetteFillColor())
         // The orange outline is card-only — visible for the whole expand swing, gone for the
         // whole collapse swing, not just once each settles.
         silhouette.setEdgeVisible(expanded)
 
-        // 1. Make the window big enough for the whole swing, then place both views within it.
-        // Content is sized to its real TARGET dimensions immediately, not to the old/small
-        // `start` size — it's invisible either way (hosting.alphaValue = 0 above, until
-        // revealContent), so there's no reason to size it for a state it's about to leave; doing
-        // so only left a second, avoidable resize for the completion handler below to perform.
+        // design/DESIGN_GUIDE.md §9.1 point 1 / §9.2 point 4 (MotionConstants.windowResizeOrdering):
+        // "window first" on the way in, "window last" on the way out. The window itself always
+        // grows to the envelope immediately, regardless of direction.
         setFrame(windowFrame(for: envelope), display: true)
-        layoutContent(for: target, envelopeSize: envelope)
+
+        // NotchView's own `.transition` now performs the actual visible pill<->card crossfade
+        // (scale, opacity, blur) — see its own doc comment — so the SwiftUI content's AppKit-level
+        // hosting frame has to already be big enough to hold *both* states for the whole swing,
+        // not just `target`, which for a collapse is the small pill. Sizing hosting to that small
+        // target immediately would correctly position the newly-inserted (still fading-in) pill,
+        // but would leave the still-large, still-fading-out card positioned for a frame it no
+        // longer has. The same "grow first / shrink last" rule the window itself follows applies
+        // here too: use whichever of (start, target) is the *expanded* one for the whole visible
+        // swing, and only settle down to the true small target in the completion handler below.
+        let contentLayoutSize = MotionConstants.windowResizeOrdering(forExpanding: expanded) == .growBeforeAnimating ? target : start
+        layoutContent(for: contentLayoutSize, envelopeSize: envelope)
 
         // The capsule's rounded-pill shape only ever belongs to the small collapsed indicator —
         // the wide expanded card is always a plain rounded rectangle (gap nil), regardless of
@@ -637,15 +641,31 @@ final class NotchPanel: NSPanel {
         let targetGap = expanded ? nil : floatingGap
 
         isAnimating = true
+        // SwiftUI owns the actual visible card/pill transition now, driven by this `withAnimation`
+        // — the native shape's own resize below still runs in parallel, unchanged, tuned to the
+        // same guide-specified spring timings, as the backdrop both the outgoing and incoming
+        // SwiftUI views sit on top of. Same fill color throughout on both layers, so any small gap
+        // between the two independently-curved animations reads as nothing more than a solid-color
+        // surface, never a seam.
+        let cardTransitionKind = expanded
+            ? MotionConstants.expandTransitionKind(reduceMotion: reduceMotion)
+            : MotionConstants.collapseTransitionKind(reduceMotion: reduceMotion)
+        withAnimation(cardTransitionKind.animation) {
+            uiState.isExpanded = expanded
+        }
+
         silhouette.resize(
             to: target, from: start, startGap: startGap, targetGap: targetGap,
             envelopeSize: envelope, reduceMotion: reduceMotion
         ) { [weak self] in
             guard let self, generation == self.presentGeneration else { return }
             self.isAnimating = false
-            // 2. Settle the window back down to the target size, plus the resting shadow margin
+            // Settle the window back down to the target size, plus the resting shadow margin
             // (restingEnvelopeSize) — not exactly the target, or CollapsedPill/ExpandedCard's own
             // shadows would have nowhere to bleed into and clip right back at the window edge.
+            // This is also where the hosting content frame (kept at the larger
+            // `contentLayoutSize` above for the whole visible swing) finally shrinks down to the
+            // true small target on a collapse — the "shrink after animating" half of the same rule.
             let restEnvelope = Self.restingEnvelopeSize(for: target, edge: self.edge)
             self.setFrame(self.windowFrame(for: restEnvelope), display: true)
             self.layoutContent(for: target, envelopeSize: restEnvelope)
@@ -659,7 +679,6 @@ final class NotchPanel: NSPanel {
                 to: target, from: target, startGap: targetGap, targetGap: targetGap,
                 envelopeSize: restEnvelope, reduceMotion: true, completion: {}
             )
-            self.revealContent()
             completion()
         }
     }
@@ -680,13 +699,10 @@ final class NotchPanel: NSPanel {
         let floatingGap = edge == .top ? geometry.floatingGap : nil
         let gap = expanded ? nil : floatingGap
         silhouette.resize(to: target, from: target, startGap: gap, targetGap: gap, envelopeSize: restEnvelope, reduceMotion: true, completion: {})
-        hosting.animator().alphaValue = 1
     }
 
     /// Centers the silhouette and the SwiftUI content within the (always at-least-as-large-as-
-    /// target, thanks to restingEnvelopeSize's shadow margin even at rest) envelope window —
-    /// content stays hidden until the shape settles (see `revealContent`), so a mid-resize
-    /// mismatch is never visible.
+    /// target, thanks to restingEnvelopeSize's shadow margin even at rest) envelope window.
     ///
     /// `silhouette.resize(...)` also sets its own frame to `envelopeSize` while it's actively
     /// animating, but nothing resets it once the animation finishes and the window shrinks back
@@ -715,15 +731,5 @@ final class NotchPanel: NSPanel {
         case .right:
             return CGPoint(x: envelopeSize.width - size.width, y: (envelopeSize.height - size.height) / 2)
         }
-    }
-
-    /// Content swaps during a brief hidden window, then fades in once the shape has settled.
-    private func revealContent() {
-        let item = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.hosting.animator().alphaValue = 1
-        }
-        contentRevealWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: item)
     }
 }

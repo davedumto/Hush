@@ -17,9 +17,14 @@ import SwiftUI
 /// to fix.
 struct CollapsedPill: View {
     let variant: PillVariant
+    /// §9.1 point 5 "Photo flight": shared with ExpandedCard's own hero photo by NotchView, the
+    /// common ancestor that owns the `@Namespace` — see ExpandedCard.photoNamespace's own doc
+    /// comment for why this defaults to `nil` everywhere except NotchView itself.
+    var photoNamespace: Namespace.ID? = nil
     @State private var isHovering = false
     @State private var spinnerRotation: Double = 0
     @State private var lowBatteryPulse = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var isVertical: Bool { variant.dock.isVertical }
     private var size: CGSize {
@@ -37,8 +42,15 @@ struct CollapsedPill: View {
             contentView
         }
         .frame(width: size.width, height: size.height)
-        .scaleEffect(isHovering ? 1.06 : 1)
-        .animation(.spring(response: 0.32, dampingFraction: 0.6), value: isHovering)
+        // §9.4 "Pill hover": "Scale to 1.06, spring response 0.32, damping 0.6." §9.6 doesn't name
+        // pill hover among the loops/transitions it stops, and it's a direct response to a live
+        // pointer position rather than a decorative idle loop, so it's left running under Reduce
+        // Motion same as mode-button hover already is (ModeButtonsSection.ModeButtonView).
+        .scaleEffect(isHovering ? MotionConstants.pillHoverScale : 1)
+        .animation(
+            .spring(response: MotionConstants.pillHoverSpringResponse, dampingFraction: MotionConstants.pillHoverSpringDamping),
+            value: isHovering
+        )
         .onHover { isHovering = $0 }
     }
 
@@ -110,6 +122,9 @@ struct CollapsedPill: View {
                 .frame(height: isVertical ? 22 : 26)
                 .opacity(variant.photoOpacity)
                 .saturation(variant.photoOpacity < 1 ? 0 : 1) // connecting: desaturated, not just faded
+                // §9.1 point 5: flies/grows into ExpandedCard's hero photo on expand — see that
+                // view's own doc comment on `photoNamespace`. Skipped under Reduce Motion (§9.6).
+                .modifier(PhotoFlight(namespace: reduceMotion ? nil : photoNamespace))
         case .genericMark, .noDevice:
             markView(dotOpacity: 1)
         }
@@ -157,7 +172,9 @@ struct CollapsedPill: View {
         }
         .frame(width: 10, height: 10)
         .onAppear {
-            withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) { spinnerRotation = 360 }
+            withAnimation(
+                .linear(duration: MotionConstants.connectingSpinnerRevolution).repeatForever(autoreverses: false)
+            ) { spinnerRotation = 360 }
         }
     }
 
@@ -176,11 +193,15 @@ struct CollapsedPill: View {
                 )
         }
         .frame(width: trackSize.width, height: trackSize.height)
-        // §9.4: "Low battery pill bar | Opacity 0.3 to 1, 1.2 s cycle, forever."
-        .opacity(isLow ? (lowBatteryPulse ? 1 : 0.3) : 1)
+        // §9.4: "Low battery pill bar | Opacity 0.3 to 1, 1.2 s cycle, forever." §9.6: not in the
+        // list of loops exempted from Reduce Motion (only the pending ring fill and the connecting
+        // spinner are), so it stays fully opaque and still rather than pulsing there.
+        .opacity(isLow && !reduceMotion ? (lowBatteryPulse ? 1 : 0.3) : 1)
         .onAppear {
-            guard isLow else { return }
-            withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) { lowBatteryPulse = true }
+            guard isLow, !reduceMotion else { return }
+            withAnimation(
+                .easeInOut(duration: MotionConstants.lowBatteryPillBarHalfCycle).repeatForever(autoreverses: true)
+            ) { lowBatteryPulse = true }
         }
     }
 }

@@ -48,7 +48,9 @@ struct ConnectingPlaceholder: View {
         // ring fill and the connecting spinner are), so it stops under Reduce Motion.
         .onAppear {
             guard !reduceMotion else { return }
-            withAnimation(.easeInOut(duration: 0.75).repeatForever(autoreverses: true)) { shimmerOn = true }
+            withAnimation(
+                .easeInOut(duration: MotionConstants.skeletonShimmerHalfCycle).repeatForever(autoreverses: true)
+            ) { shimmerOn = true }
         }
     }
 }
@@ -69,7 +71,9 @@ struct ConnectingPulsingDot: View {
             .opacity(reduceMotion ? 1 : (isBright ? 1 : 0.3))
             .onAppear {
                 guard !reduceMotion else { return }
-                withAnimation(.easeInOut(duration: 0.55).repeatForever(autoreverses: true)) { isBright = true }
+                withAnimation(
+                    .easeInOut(duration: MotionConstants.pulsingStatusDotHalfCycle).repeatForever(autoreverses: true)
+                ) { isBright = true }
             }
     }
 }
@@ -90,7 +94,9 @@ struct ConnectingSpinner: View {
         }
         .frame(width: size, height: size)
         .onAppear {
-            withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) { rotation = 360 }
+            withAnimation(
+                .linear(duration: MotionConstants.connectingSpinnerRevolution).repeatForever(autoreverses: false)
+            ) { rotation = 360 }
         }
     }
 }

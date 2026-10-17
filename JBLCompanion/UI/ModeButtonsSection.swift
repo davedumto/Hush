@@ -346,7 +346,9 @@ private struct PulsingStatusDot: View {
             .frame(width: 7, height: 7)
             .opacity(isBright ? 1 : 0.3)
             .onAppear {
-                withAnimation(.easeInOut(duration: 0.55).repeatForever(autoreverses: true)) { isBright = true }
+                withAnimation(
+                    .easeInOut(duration: MotionConstants.pulsingStatusDotHalfCycle).repeatForever(autoreverses: true)
+                ) { isBright = true }
             }
     }
 }
