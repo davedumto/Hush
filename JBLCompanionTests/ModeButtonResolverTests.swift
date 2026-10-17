@@ -171,4 +171,19 @@ final class ModeButtonResolverTests: XCTestCase {
         XCTAssertEqual(content.modeName, "Ambient")
         XCTAssertEqual(content.detail, "waiting for headphones…")
     }
+
+    // MARK: - hasWorkingControls
+
+    func testHasWorkingControlsIsTrueWhenSupportedAndAtLeastOneModeVerified() {
+        XCTAssertTrue(ModeButtonResolver.hasWorkingControls(supportsNoiseControl: true, isModeVerified: { $0 == .anc }))
+    }
+
+    func testHasWorkingControlsIsFalseWhenNotSupportedEvenIfModesAreVerified() {
+        XCTAssertFalse(ModeButtonResolver.hasWorkingControls(supportsNoiseControl: false, isModeVerified: { $0 == .anc }))
+    }
+
+    func testHasWorkingControlsIsFalseWhenSupportedButNoModeIsVerified() {
+        // GenericProfile's exact shape: supportsNoiseControl false and nothing verified.
+        XCTAssertFalse(ModeButtonResolver.hasWorkingControls(supportsNoiseControl: false, isModeVerified: { _ in false }))
+    }
 }

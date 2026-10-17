@@ -34,6 +34,15 @@ struct NotchView: View {
     /// — a closure, like the other NotchPanel-owned behaviors, since collapsing is a real window/
     /// silhouette transition NotchPanel owns, not something NotchView can trigger by itself.
     let onCollapseTabTapped: () -> Void
+    /// design/DESIGN_GUIDE.md §5 "No headphones": re-runs classic detection and the RFCOMM open
+    /// through AppDelegate's existing entry points.
+    let onReconnectTapped: () -> Void
+    /// Opens System Settings' Bluetooth pane — plain AppKit, no Bluetooth protocol involved.
+    let onOpenBluetoothSettingsTapped: () -> Void
+    /// A closure, not a frozen value, for the same reason `isNotched` is: NotchPanel builds this
+    /// NotchView once at init, so a plain value read at construction time would never reflect a
+    /// later UserDefaults change (AppDelegate persists this on every classic-connect match).
+    let lastMatchedProfileDisplayName: () -> String?
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -54,14 +63,19 @@ struct NotchView: View {
             .frame(width: collapsedSize.width, height: collapsedSize.height)
     }
 
+    /// design/DESIGN_GUIDE.md §5 "Connecting": the classic link is up but no status event has
+    /// arrived yet — a derived signal (CardConditionResolver uses the same two facts for the
+    /// card), never a new piece of raw Bluetooth state.
+    private var isConnecting: Bool { state.connection == .connected && state.noiseMode == .unknown }
+
     /// Bridges live app state to PillVariant.resolve — the app only ever docks to the top today
-    /// (NotchPanel has no left/right/bottom placement logic yet) and never produces a real
-    /// "connecting" signal (HeadphoneState has no such state), so those PillVariant cases are
-    /// exercised by CollapsedPill's own previews/tests but not reachable from here.
+    /// (NotchPanel has no left/right/bottom placement logic yet), so bottom/left/right stay
+    /// exercised only by CollapsedPill's own previews/tests. `.connecting` *is* reachable from
+    /// here now, via `isConnecting` above.
     private var pillVariant: PillVariant {
         PillVariant.resolve(
             device: state.connection == .connected ? .matched(photo: state.photoAssetNames) : .noDevice,
-            connection: .connected,
+            connection: isConnecting ? .connecting : .connected,
             batteryPercent: state.batteryPercent,
             theme: colorScheme == .dark ? .dark : .light,
             dock: .top(isNotched: isNotched())
@@ -72,11 +86,11 @@ struct NotchView: View {
     private var expandedContent: some View {
         // Only the top dock is reachable from live app state today — see ExpandedCard's own doc
         // comment for why bottom/left/right exist (pure logic/previews) but aren't wired in yet.
-        ExpandedCard(state: state, dock: .top, onCollapseTapped: onCollapseTabTapped) {
-            ModeButtonsSection(
-                state: state, dock: .top, isModeVerified: isModeVerified,
-                supportsNoiseControl: supportsNoiseControl(), onSelectNoiseMode: onSelectNoiseMode
-            )
-        }
+        ExpandedCard(
+            state: state, dock: .top, onCollapseTapped: onCollapseTabTapped, isModeVerified: isModeVerified,
+            supportsNoiseControl: supportsNoiseControl(), onSelectNoiseMode: onSelectNoiseMode,
+            onReconnectTapped: onReconnectTapped, onOpenBluetoothSettingsTapped: onOpenBluetoothSettingsTapped,
+            lastMatchedProfileDisplayName: lastMatchedProfileDisplayName()
+        )
     }
 }

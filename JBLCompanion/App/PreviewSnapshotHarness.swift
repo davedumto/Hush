@@ -55,25 +55,42 @@ enum PreviewSnapshotHarness {
     private static var scenarios: [Scenario] {
         let s770 = state(noiseMode: .anc)
         let s670 = state(deviceName: "JBL Tune 670NC", modelNumber: "670NC", noiseMode: .anc)
+        // Reuses s670's shape (battery 64, matching design/reference/03-04) rather than leaving
+        // noiseMode at .unknown: that would make CardConditionResolver read this as "connecting"
+        // instead of "connected with unavailable controls" (.unknown is specifically "no status
+        // event yet", which is exactly what .connecting means) — there's no way to represent "a
+        // status event arrived, reporting something no button maps to," since NoiseMode's only
+        // non-.unknown cases are the four buttons themselves. So ANC renders active here, same as
+        // the hardware-reported-Off case (ModeButtonResolverTests) — a deliberate, documented
+        // difference from 03/04's static mockup (which shows nothing active at all): an active
+        // mode is still truthfully hardware-confirmed even when the profile has no verified
+        // *commands*, and CLAUDE.md's active rule has no carve-out for that.
+        let controlsUnavailable = state(battery: 64, deviceName: "JBL Tune 670NC", modelNumber: "670NC", noiseMode: .anc)
         let pending = state(noiseMode: .anc, pendingNoiseMode: .ambientAware)
         let timedOut = state(noiseMode: .ambientAware, timedOut: true)
         let unverifiedEventMap = state(noiseMode: .anc, eventMapVerified: false)
         let lowBattery = state(battery: 9, noiseMode: .anc)
+        // noiseMode defaults to .unknown — classic-connected with no status event yet is exactly
+        // "connecting" (CardConditionResolver).
+        let connecting = state()
         let noDevice = state(connected: false, battery: nil)
 
+        // Two overloads, not one with default parameter values: a local function whose default
+        // argument expression references an outer static member hits a real Swift compiler bug
+        // ("closure captures '$base$' before it is declared") — hit once already earlier in this
+        // file's history, worked around the same way there.
         func card(
             _ st: HeadphoneState, _ dock: CardDock,
-            isModeVerified: @escaping (CommandableNoiseMode) -> Bool, supportsNoiseControl: Bool
+            isModeVerified: @escaping (CommandableNoiseMode) -> Bool, supportsNoiseControl: Bool, lastSeen: String?
         ) -> AnyView {
-            AnyView(ExpandedCard(state: st, dock: dock, onCollapseTapped: {}) {
-                ModeButtonsSection(
-                    state: st, dock: dock, isModeVerified: isModeVerified,
-                    supportsNoiseControl: supportsNoiseControl, onSelectNoiseMode: { _ in }
-                )
-            })
+            AnyView(ExpandedCard(
+                state: st, dock: dock, onCollapseTapped: {}, isModeVerified: isModeVerified,
+                supportsNoiseControl: supportsNoiseControl, onSelectNoiseMode: { _ in }, onReconnectTapped: {},
+                onOpenBluetoothSettingsTapped: {}, lastMatchedProfileDisplayName: lastSeen
+            ))
         }
         func card(_ st: HeadphoneState, _ dock: CardDock) -> AnyView {
-            card(st, dock, isModeVerified: matchedProfileIsModeVerified, supportsNoiseControl: true)
+            card(st, dock, isModeVerified: matchedProfileIsModeVerified, supportsNoiseControl: true, lastSeen: "JBL Tune 770NC")
         }
         func pill(_ st: HeadphoneState, _ dock: PillDock, connection: PillConnectionState = .connected, scheme: ColorScheme) -> AnyView {
             let variant = PillVariant.resolve(
@@ -96,11 +113,19 @@ enum PreviewSnapshotHarness {
             Scenario(name: "card-30-left-770-light", colorScheme: .light, content: card(s770, .left)),
             Scenario(name: "card-03-top-670-dark", colorScheme: .dark, content: card(s670, .top)),
             Scenario(name: "card-lowbattery-dark", colorScheme: .dark, content: card(lowBattery, .top)),
-            Scenario(name: "card-nodevice-dark", colorScheme: .dark, content: card(noDevice, .top, isModeVerified: { _ in false }, supportsNoiseControl: true)),
-            Scenario(name: "card-controls-unsupported-dark", colorScheme: .dark, content: card(s770, .top, isModeVerified: matchedProfileIsModeVerified, supportsNoiseControl: false)),
+            Scenario(name: "card-lowbattery-light", colorScheme: .light, content: card(lowBattery, .top)),
+            Scenario(name: "card-19-connecting-dark", colorScheme: .dark, content: card(connecting, .top)),
+            Scenario(name: "card-27-connecting-light", colorScheme: .light, content: card(connecting, .top)),
+            Scenario(name: "card-20-nodevice-dark", colorScheme: .dark, content: card(noDevice, .top, isModeVerified: { _ in false }, supportsNoiseControl: true, lastSeen: "JBL Tune 770NC")),
+            Scenario(name: "card-28-nodevice-light", colorScheme: .light, content: card(noDevice, .top, isModeVerified: { _ in false }, supportsNoiseControl: true, lastSeen: "JBL Tune 770NC")),
+            Scenario(name: "card-nodevice-never-matched-dark", colorScheme: .dark, content: card(noDevice, .top, isModeVerified: { _ in false }, supportsNoiseControl: true, lastSeen: nil)),
+            Scenario(name: "card-nodevice-side-dock-dark", colorScheme: .dark, content: card(noDevice, .left, isModeVerified: { _ in false }, supportsNoiseControl: true, lastSeen: "JBL Tune 770NC")),
+            Scenario(name: "card-03-controls-unavailable-dark", colorScheme: .dark, content: card(controlsUnavailable, .top, isModeVerified: { _ in false }, supportsNoiseControl: false, lastSeen: "JBL Tune 770NC")),
+            Scenario(name: "card-04-controls-unavailable-light", colorScheme: .light, content: card(controlsUnavailable, .top, isModeVerified: { _ in false }, supportsNoiseControl: false, lastSeen: "JBL Tune 770NC")),
             Scenario(name: "pill-15-variants-dark", colorScheme: .dark, content: pill(s770, .top(isNotched: false), scheme: .dark)),
             Scenario(name: "pill-16-variants-light", colorScheme: .light, content: pill(s770, .top(isNotched: false), scheme: .light)),
             Scenario(name: "pill-notch-dark", colorScheme: .dark, content: pill(s770, .top(isNotched: true), scheme: .dark)),
+            Scenario(name: "pill-connecting-dark", colorScheme: .dark, content: pill(connecting, .top(isNotched: false), connection: .connecting, scheme: .dark)),
             Scenario(name: "zzz-icon-closeup", colorScheme: .dark, content: AnyView(
                 HStack(spacing: 16) {
                     iconCloseup("IconSettings")

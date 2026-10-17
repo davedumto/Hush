@@ -73,7 +73,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             headphoneState: headphoneState,
             onSelectNoiseMode: { [weak self] mode in self?.requestNoiseMode(mode) },
             isModeVerified: { [weak self] mode in self?.isModeVerified(mode) ?? false },
-            supportsNoiseControl: { [weak self] in self?.activeSession?.profile.supportsNoiseControl ?? false }
+            supportsNoiseControl: { [weak self] in self?.activeSession?.profile.supportsNoiseControl ?? false },
+            onReconnectTapped: { [weak self] in self?.reconnect() },
+            onOpenBluetoothSettingsTapped: { [weak self] in self?.openBluetoothSettings() },
+            lastMatchedProfileDisplayName: { Self.lastMatchedProfileDisplayName }
         )
         self.panel = panel
         let showCircle = UserDefaults.standard.object(forKey: "showNotchCircle") as? Bool ?? true
@@ -182,6 +185,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeSession?.noiseModeCoordinator.requestMode(mode)
     }
 
+    // MARK: - §5 "No headphones" actions
+
+    private static let lastMatchedProfileDisplayNameKey = "lastMatchedProfileDisplayName"
+
+    /// design/DESIGN_GUIDE.md §5: "Last seen: <last matched profile display name>" — written once
+    /// per successful classic-connect match (below), read back by ExpandedCard's no-device layout.
+    /// A static UserDefaults accessor, not instance state, so NotchPanel's view-layer closure can
+    /// read it without holding a reference to AppDelegate.
+    static var lastMatchedProfileDisplayName: String? {
+        UserDefaults.standard.string(forKey: lastMatchedProfileDisplayNameKey)
+    }
+
+    /// Re-runs classic detection through the exact same entry points `applicationDidFinishLaunching`
+    /// itself uses — `stop()` first, not just `start()` again, so a repeated tap never leaks a
+    /// second notification registration/poller on top of the one from launch (ClassicConnectionMonitor
+    /// isn't written to be called twice without an intervening `stop()`). If the device is still
+    /// classically connected, this chains straight back through `classicConnectionMonitor(_:didConnect:...)`
+    /// exactly as a fresh connect would, which is what re-opens RFCOMM — no RFCOMM-specific code
+    /// here at all, and ClassicConnectionMonitor/RFCOMMRaceLink are untouched.
+    func reconnect() {
+        logger.info("Reconnect requested from the no-headphones card")
+        classicMonitor.stop()
+        classicMonitor.start()
+    }
+
+    /// Plain AppKit, not Bluetooth — opens System Settings' Bluetooth pane.
+    func openBluetoothSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.bluetooth") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     #if DEBUG
     /// Every mode currently verified — exactly what "Send test frame…" offers, so the Debug menu
     /// never exposes a way to test (or accidentally send) an unverified command.
@@ -261,6 +295,9 @@ extension AppDelegate: ClassicConnectionMonitorDelegate {
         headphoneState.modelNumberText = profile.modelNumberText
         headphoneState.noiseModeEventMapVerified = profile.eventMapVerified
         headphoneState.lastUpdated = Date()
+        // design/DESIGN_GUIDE.md §5 "No headphones": persisted so a later disconnect can still
+        // show "Last seen: <name>" — survives app relaunch, unlike HeadphoneState itself.
+        UserDefaults.standard.set(profile.displayName, forKey: Self.lastMatchedProfileDisplayNameKey)
 
         session.bleLink.startMonitoring()
         // RFCOMM is now opened for any matched profile, to listen for status — whether writes

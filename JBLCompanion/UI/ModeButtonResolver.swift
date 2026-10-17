@@ -68,6 +68,15 @@ enum ModeButtonResolver {
             && state(for: mode, isModeVerified: isModeVerified, currentMode: currentMode, pendingMode: pendingMode) == .available
     }
 
+    /// Whether the mode buttons do anything useful at all for the connected profile —
+    /// design/DESIGN_GUIDE.md §5 "Controls-unavailable": `supportsNoiseControl` false, or true but
+    /// with no single verified mode (e.g. GenericProfile, every mode false by default). Shared by
+    /// `ModeButtonsSection`'s note-row gate and `CardConditionResolver`'s top-level condition, so
+    /// the two can never disagree about what counts as "available."
+    static func hasWorkingControls(supportsNoiseControl: Bool, isModeVerified: (CommandableNoiseMode) -> Bool) -> Bool {
+        supportsNoiseControl && CommandableNoiseMode.allCases.contains(where: isModeVerified)
+    }
+
     /// - Parameters:
     ///   - currentMode: `HeadphoneState.noiseMode`.
     ///   - pendingMode: `HeadphoneState.pendingNoiseMode`.

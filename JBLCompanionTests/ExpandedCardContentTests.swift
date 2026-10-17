@@ -5,55 +5,35 @@ final class ExpandedCardContentTests: XCTestCase {
     // MARK: - Battery chip
 
     func testNoBatteryReadingShowsNoChip() {
-        let content = ExpandedCardContent.resolve(connection: .connected, batteryPercent: nil)
+        let content = ExpandedCardContent.resolve(batteryPercent: nil)
         XCTAssertEqual(content.batteryChip, .none)
     }
 
     func testBatteryAt15PercentIsNormalNotLow() {
-        let content = ExpandedCardContent.resolve(connection: .connected, batteryPercent: 15)
+        let content = ExpandedCardContent.resolve(batteryPercent: 15)
         XCTAssertEqual(content.batteryChip, .normal(percent: 15))
     }
 
     func testBatteryAt14PercentIsLow() {
-        let content = ExpandedCardContent.resolve(connection: .connected, batteryPercent: 14)
+        let content = ExpandedCardContent.resolve(batteryPercent: 14)
         XCTAssertEqual(content.batteryChip, .low(percent: 14))
     }
 
     func testBatteryAt82PercentIsNormal() {
-        let content = ExpandedCardContent.resolve(connection: .connected, batteryPercent: 82)
+        let content = ExpandedCardContent.resolve(batteryPercent: 82)
         XCTAssertEqual(content.batteryChip, .normal(percent: 82))
     }
 
     // MARK: - Name block subtitle text
 
     func testConnectedNormalBatterySubtitle() {
-        let content = ExpandedCardContent.resolve(connection: .connected, batteryPercent: 82)
+        let content = ExpandedCardContent.resolve(batteryPercent: 82)
         XCTAssertEqual(content.subtitleText, "Connected")
     }
 
     func testConnectedLowBatterySubtitle() {
-        let content = ExpandedCardContent.resolve(connection: .connected, batteryPercent: 9)
+        let content = ExpandedCardContent.resolve(batteryPercent: 9)
         XCTAssertEqual(content.subtitleText, "Connected · battery low")
-    }
-
-    func testDisconnectedSubtitle() {
-        let content = ExpandedCardContent.resolve(connection: .disconnected, batteryPercent: nil)
-        XCTAssertEqual(content.subtitleText, "Disconnected")
-    }
-
-    // MARK: - Footer text
-
-    func testFooterLeftIsAlwaysBluetooth() {
-        XCTAssertEqual(ExpandedCardContent.resolve(connection: .connected, batteryPercent: 50).footerLeftText, "BLUETOOTH")
-        XCTAssertEqual(ExpandedCardContent.resolve(connection: .disconnected, batteryPercent: nil).footerLeftText, "BLUETOOTH")
-    }
-
-    func testFooterRightIsSyncedWhenConnected() {
-        XCTAssertEqual(ExpandedCardContent.resolve(connection: .connected, batteryPercent: 50).footerRightText, "SYNCED")
-    }
-
-    func testFooterRightIsIdleWhenDisconnected() {
-        XCTAssertEqual(ExpandedCardContent.resolve(connection: .disconnected, batteryPercent: nil).footerRightText, "IDLE")
     }
 
     // MARK: - Hero number text

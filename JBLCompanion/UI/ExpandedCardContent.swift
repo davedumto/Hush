@@ -11,9 +11,10 @@ enum CardDock: Equatable {
     }
 }
 
-/// The card's text/battery-chip content, resolved once from live state so the view itself never
-/// branches on raw connection/battery facts directly — design/DESIGN_GUIDE.md §4 "Name block" and
-/// "Footer".
+/// The card's text/battery-chip content for a connected, "normal-layout" card (§4 "Name block") —
+/// `CardConditionResolver` handles everything about `.noDevice`/`.connecting` (including their own
+/// name-block text and the footer, which applies regardless of condition) before this is ever
+/// reached, so there's no disconnected branch here anymore.
 struct ExpandedCardContent: Equatable {
     enum BatteryChip: Equatable {
         case none
@@ -23,8 +24,6 @@ struct ExpandedCardContent: Equatable {
 
     let batteryChip: BatteryChip
     let subtitleText: String
-    let footerLeftText: String
-    let footerRightText: String
 
     /// The hero's giant background number (§4) is just the digits — "770", not the chip's full
     /// "770NC" — e.g. `heroNumberText(from: "770NC") == "770"`.
@@ -32,7 +31,7 @@ struct ExpandedCardContent: Equatable {
         String(modelNumberText.filter(\.isNumber))
     }
 
-    static func resolve(connection: ConnectionState, batteryPercent: Int?) -> ExpandedCardContent {
+    static func resolve(batteryPercent: Int?) -> ExpandedCardContent {
         let batteryChip: BatteryChip
         if let percent = batteryPercent {
             // Shares PillVariant's own threshold constant rather than redefining "under 15%" here.
@@ -44,17 +43,6 @@ struct ExpandedCardContent: Equatable {
         let isLow: Bool
         if case .low = batteryChip { isLow = true } else { isLow = false }
 
-        let subtitleText: String
-        let footerRightText: String
-        switch connection {
-        case .connected:
-            subtitleText = isLow ? "Connected · battery low" : "Connected"
-            footerRightText = "SYNCED"
-        case .disconnected:
-            subtitleText = "Disconnected"
-            footerRightText = "IDLE"
-        }
-
-        return ExpandedCardContent(batteryChip: batteryChip, subtitleText: subtitleText, footerLeftText: "BLUETOOTH", footerRightText: footerRightText)
+        return ExpandedCardContent(batteryChip: batteryChip, subtitleText: isLow ? "Connected · battery low" : "Connected")
     }
 }

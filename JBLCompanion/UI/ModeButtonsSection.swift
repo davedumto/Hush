@@ -19,16 +19,23 @@ struct ModeButtonsSection: View {
     @Namespace private var modeFill
 
     private var isVertical: Bool { dock.isVertical }
-    /// Same gate the old segmented control used: a disconnected device has no "unsupported model"
-    /// to report yet, so it falls through to the (all-disabled) buttons instead of the note row.
-    private var showsNoteRow: Bool { state.connection == .connected && !supportsNoiseControl }
+    /// design/DESIGN_GUIDE.md §5 "Controls-unavailable": the note row shows whenever the profile
+    /// has no working controls at all (not supported, or supported but with no single verified
+    /// mode) — ExpandedCard only ever mounts this view once CardConditionResolver has already
+    /// confirmed a device is connected and ready, so there's no separate connection check here.
+    private var showsNoteRow: Bool {
+        !ModeButtonResolver.hasWorkingControls(supportsNoiseControl: supportsNoiseControl, isModeVerified: isModeVerified)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // design/DESIGN_GUIDE.md §5 "Controls-unavailable": the note row replaces the status
+            // line only — the four buttons (all disabled per the flags, via the resolver each
+            // button already runs through below) still render above it.
+            buttons
             if showsNoteRow {
                 NoteRow()
             } else {
-                buttons
                 StatusLineView(content: statusLineContent)
             }
         }

@@ -41,6 +41,9 @@ final class NotchPanel: NSPanel {
     private let onSelectNoiseMode: (CommandableNoiseMode) -> Void
     private let isModeVerified: (CommandableNoiseMode) -> Bool
     private let supportsNoiseControl: () -> Bool
+    private let onReconnectTapped: () -> Void
+    private let onOpenBluetoothSettingsTapped: () -> Void
+    private let lastMatchedProfileDisplayName: () -> String?
 
     private let silhouette = NotchSilhouetteView(frame: .zero)
     private var hosting: NSHostingView<NotchView>!
@@ -88,12 +91,18 @@ final class NotchPanel: NSPanel {
     init(
         headphoneState: HeadphoneState, onSelectNoiseMode: @escaping (CommandableNoiseMode) -> Void,
         isModeVerified: @escaping (CommandableNoiseMode) -> Bool,
-        supportsNoiseControl: @escaping () -> Bool
+        supportsNoiseControl: @escaping () -> Bool,
+        onReconnectTapped: @escaping () -> Void,
+        onOpenBluetoothSettingsTapped: @escaping () -> Void,
+        lastMatchedProfileDisplayName: @escaping () -> String?
     ) {
         self.headphoneState = headphoneState
         self.onSelectNoiseMode = onSelectNoiseMode
         self.isModeVerified = isModeVerified
         self.supportsNoiseControl = supportsNoiseControl
+        self.onReconnectTapped = onReconnectTapped
+        self.onOpenBluetoothSettingsTapped = onOpenBluetoothSettingsTapped
+        self.lastMatchedProfileDisplayName = lastMatchedProfileDisplayName
 
         let resolution = Self.resolveScreen()
         let screen = resolution.screen
@@ -124,7 +133,9 @@ final class NotchPanel: NSPanel {
                 state: headphoneState, uiState: uiState, collapsedSize: initialGeometry.collapsedSize,
                 onSelectNoiseMode: onSelectNoiseMode, isModeVerified: isModeVerified,
                 supportsNoiseControl: supportsNoiseControl, isNotched: { [weak self] in self?.isNotched ?? false },
-                onCollapseTabTapped: { [weak self] in self?.handleTabTap() }
+                onCollapseTabTapped: { [weak self] in self?.handleTabTap() },
+                onReconnectTapped: onReconnectTapped, onOpenBluetoothSettingsTapped: onOpenBluetoothSettingsTapped,
+                lastMatchedProfileDisplayName: lastMatchedProfileDisplayName
             )
         )
         // NSHostingView does not clip its own content to its frame by default. `hosting` itself

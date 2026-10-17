@@ -1,20 +1,37 @@
 import SwiftUI
 
-/// The expanded card — design/DESIGN_GUIDE.md §4. Only the top dock is reachable from the live
-/// app today (NotchPanel has no left/right/bottom placement logic yet, same limitation as
-/// CollapsedPill's own doc comment describes); bottom/left/right are fully built and
-/// tested/previewed but not wired into real app state.
+/// The expanded card — design/DESIGN_GUIDE.md §4 and §5 "Conditions". Only the top dock is
+/// reachable from the live app today (NotchPanel has no left/right/bottom placement logic yet,
+/// same limitation as CollapsedPill's own doc comment describes); bottom/left/right are fully
+/// built and tested/previewed but not wired into real app state.
 ///
-/// Mode buttons are explicitly out of scope for this stage — `modeControls` is a clearly marked
-/// slot the caller fills with the existing segmented control/status caption, completely unchanged,
-/// so the app keeps working exactly as before. A later stage replaces what's passed into that slot.
-struct ExpandedCard<ModeControls: View>: View {
+/// Internally resolves its own `CardCondition` (CardConditionResolver) from `state`, and branches
+/// the top-row chip, hero, name block, bottom section (mode buttons / skeleton / reconnect
+/// actions), and footer on it — there's no externally-injected "mode controls slot" anymore (that
+/// generic-closure pattern existed only because mode buttons were explicitly out of scope for an
+/// earlier stage; now that the whole card's condition handling lives here, keeping that slot
+/// separate would just split one cohesive concern across two places).
+struct ExpandedCard: View {
     let state: HeadphoneState
     let dock: CardDock
     let onCollapseTapped: () -> Void
-    @ViewBuilder let modeControls: () -> ModeControls
+    /// Per-mode "is this command frame hardware-verified" check (DeviceProfile.isModeVerified).
+    let isModeVerified: (CommandableNoiseMode) -> Bool
+    /// Whether the connected device's own model has noise control wired up at all
+    /// (DeviceProfile.supportsNoiseControl).
+    let supportsNoiseControl: Bool
+    let onSelectNoiseMode: (CommandableNoiseMode) -> Void
+    /// §5 "No headphones": re-runs classic detection and the RFCOMM open through the existing
+    /// entry points — this view never touches Bluetooth itself.
+    let onReconnectTapped: () -> Void
+    let onOpenBluetoothSettingsTapped: () -> Void
+    /// §5 "No headphones": "Last seen: <last matched profile display name>" — nil omits the line.
+    /// Read from UserDefaults by the caller (AppDelegate persists it on every successful match);
+    /// this view stays a pure function of its inputs, no UserDefaults access of its own.
+    let lastMatchedProfileDisplayName: String?
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var isVertical: Bool { dock.isVertical }
     private var cardSize: CGSize {
@@ -31,8 +48,28 @@ struct ExpandedCard<ModeControls: View>: View {
     // the shallowest the tab can get without touching the guide's own radius tokens.
     private var tabDepthIntoPanel: CGFloat { 18 }
 
+    /// §5: classicConnected/firstStatusEventReceived are both derived from existing HeadphoneState
+    /// fields, not new raw state — CLAUDE.md/the task: "add a derived connecting state with no
+    /// Bluetooth changes." `noiseMode` resets to `.unknown` on every disconnect (AppDelegate) and
+    /// only ever becomes something else via a real RACE status event, so `!= .unknown` is exactly
+    /// "at least one status event has arrived since connecting."
+    private var condition: CardCondition {
+        CardConditionResolver.resolve(
+            classicConnected: state.connection == .connected,
+            firstStatusEventReceived: state.noiseMode != .unknown,
+            batteryPercent: state.batteryPercent,
+            controlsAvailable: ModeButtonResolver.hasWorkingControls(
+                supportsNoiseControl: supportsNoiseControl, isModeVerified: isModeVerified
+            )
+        )
+    }
+    private var isConnecting: Bool { condition == .connecting }
+    private var isNoDevice: Bool { condition == .noDevice }
+
+    /// Only meaningful for the "normal" conditions (controlsUnavailable/lowBattery/connected) —
+    /// noDevice/connecting render their own name-block text directly.
     private var content: ExpandedCardContent {
-        ExpandedCardContent.resolve(connection: state.connection, batteryPercent: state.batteryPercent)
+        ExpandedCardContent.resolve(batteryPercent: state.batteryPercent)
     }
 
     var body: some View {
@@ -77,7 +114,7 @@ struct ExpandedCard<ModeControls: View>: View {
             heroSection
             nameBlock
                 .padding(.top, 10)
-            modeControls()
+            bottomSection
                 .padding(.top, 12)
             footer
                 .padding(.top, 12)
@@ -86,6 +123,11 @@ struct ExpandedCard<ModeControls: View>: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(panelGradient, in: RoundedRectangle(cornerRadius: 27, style: .continuous))
         .padding(7)
+        // §9.5 "Connecting to connected"/"Connected to disconnected": a plain crossfade across
+        // whichever parts of the card just changed. The card's own height is fixed (470
+        // regardless of condition — see NotchPanel's own doc comment on why that's deliberate),
+        // so there's no height change left for the guide's "collapse spring" to actually animate.
+        .animation(reduceMotion ? .easeInOut(duration: 0.16) : .easeOut(duration: 0.3), value: condition)
     }
 
     /// §4 "Panel padding on the docked side": extra room on the edge the tab occupies, so content
@@ -167,10 +209,9 @@ struct ExpandedCard<ModeControls: View>: View {
     }
 
     /// HushArchTemplate (tintable) + a hand-drawn orange dot, same technique CollapsedPill uses —
-    /// HushMark's own flattened asset always renders its dot at full orange, which is fine here
-    /// (the tab's mark is never dimmed), but reusing the template keeps the tint correct in both
-    /// themes without a second asset variant.
-    private func markGlyph(size: CGFloat, color: Color) -> some View {
+    /// HushMark's own flattened asset always renders its dot at full orange, which is fine for
+    /// every caller except the no-device hero (§5: "dot dimmed"), hence `dotOpacity`.
+    private func markGlyph(size: CGFloat, color: Color, dotOpacity: Double = 1) -> some View {
         ZStack {
             Image("HushArchTemplate")
                 .renderingMode(.template)
@@ -181,6 +222,7 @@ struct ExpandedCard<ModeControls: View>: View {
                 .fill(Theme.Brand.orange)
                 .frame(width: size * (7.4 / 32), height: size * (7.4 / 32))
                 .offset(y: size * ((20.5 - 16) / 32))
+                .opacity(dotOpacity)
         }
         .frame(width: size, height: size)
     }
@@ -189,29 +231,55 @@ struct ExpandedCard<ModeControls: View>: View {
 
     private var topRow: some View {
         HStack(spacing: 8) {
-            modelChip
+            topRowChip
             Spacer(minLength: 0)
             iconButton("IconSettings")
             iconButton("IconPower")
         }
     }
 
+    /// §5: the top-left chip itself swaps content for "No device" and "Connecting" — otherwise
+    /// it's the normal model-number chip (empty/hidden when there's no model number to show).
     @ViewBuilder
-    private var modelChip: some View {
-        if !state.modelNumberText.isEmpty {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(Theme.Brand.orange)
-                    .frame(width: 7, height: 7)
-                    .shadow(color: Theme.Brand.orange.opacity(0.85), radius: 4.5)
-                Text(state.modelNumberText)
+    private var topRowChip: some View {
+        switch condition {
+        case .noDevice:
+            chipCapsule {
+                Text("No device")
                     .font(Theme.Fonts.modelChip)
                     .foregroundStyle(Theme.Semantic.chipInk)
             }
+        case .connecting:
+            chipCapsule {
+                HStack(spacing: 6) {
+                    ConnectingSpinner()
+                    Text("Connecting")
+                        .font(Theme.Fonts.modelChip)
+                        .foregroundStyle(Theme.Semantic.chipInk)
+                }
+            }
+        case .controlsUnavailable, .lowBattery, .connected:
+            if !state.modelNumberText.isEmpty {
+                chipCapsule {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(Theme.Brand.orange)
+                            .frame(width: 7, height: 7)
+                            .shadow(color: Theme.Brand.orange.opacity(0.85), radius: 4.5)
+                        Text(state.modelNumberText)
+                            .font(Theme.Fonts.modelChip)
+                            .foregroundStyle(Theme.Semantic.chipInk)
+                    }
+                }
+            }
+        }
+    }
+
+    private func chipCapsule<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
             .padding(.horizontal, 11)
             .frame(height: 26)
             .background(Theme.Semantic.chipFill, in: Capsule())
-        }
     }
 
     private func iconButton(_ assetName: String) -> some View {
@@ -239,7 +307,9 @@ struct ExpandedCard<ModeControls: View>: View {
             ZStack(alignment: .bottomTrailing) {
                 Color.clear
 
-                // §4 hero layers, back to front.
+                // §4 hero layers, back to front. Present in every condition (including
+                // no-device/connecting — §5's own reference images keep the ambient glow/floor
+                // shadow behind the mark or the desaturated photo).
                 if colorScheme == .dark {
                     Ellipse()
                         .fill(
@@ -271,11 +341,18 @@ struct ExpandedCard<ModeControls: View>: View {
                 photoView
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
 
-                hotspot
-                    .position(x: geo.size.width * (isVertical ? 0.14 : 0.22), y: heroHeight * 0.62)
+                // §5 "No headphones": no hotspot (nothing to tag on a mark with no real photo).
+                if !isNoDevice {
+                    hotspot
+                        .position(x: geo.size.width * (isVertical ? 0.14 : 0.22), y: heroHeight * 0.62)
+                }
 
-                batteryChip
-                    .padding(.bottom, isVertical ? 6 : 18)
+                // §5: "no battery chip" while connecting or with no device, even if a BLE reading
+                // happens to already be cached from a previous connection.
+                if !isNoDevice && !isConnecting {
+                    batteryChip
+                        .padding(.bottom, isVertical ? 6 : 18)
+                }
             }
         }
         .frame(height: heroHeight)
@@ -295,7 +372,9 @@ struct ExpandedCard<ModeControls: View>: View {
             // navy-on-navy gradient — without this, the edges exposed past the (also white, in
             // light theme) photo read as a flat competing blob rather than a layered watermark.
             .shadow(color: Theme.Brand.black.opacity(colorScheme == .dark ? 0 : 0.14), radius: 6, x: 0, y: 3)
-            .opacity(state.modelNumberText.isEmpty ? 0 : 1)
+            // §5 "Connecting": "model number at 35%". Empty (no-device, or nothing matched yet)
+            // always wins regardless of condition — there's nothing to fade in at any opacity.
+            .opacity(state.modelNumberText.isEmpty ? 0 : (isConnecting ? 0.35 : 1))
             .lineLimit(1)
             .minimumScaleFactor(0.5)
     }
@@ -308,10 +387,22 @@ struct ExpandedCard<ModeControls: View>: View {
                 .aspectRatio(contentMode: .fit)
                 .frame(height: photoHeight)
                 .shadow(color: Theme.Brand.black.opacity(0.55), radius: 13, x: 0, y: 11)
+                // §5 "Connecting": "photo at 30% and fully desaturated".
+                .opacity(isConnecting ? 0.3 : 1)
+                .saturation(isConnecting ? 0 : 1)
+        } else if isNoDevice {
+            // §5 "No headphones": "HushMark at 118 (side docks 92), arch white 32%, dot dimmed".
+            markGlyph(
+                size: 118, color: colorScheme == .dark ? .white.opacity(0.32) : Theme.Brand.navy.opacity(0.32),
+                dotOpacity: 0.5
+            )
+            .frame(height: photoHeight)
         } else {
-            // CLAUDE.md / §4: unknown models use the HushMark with no photo.
+            // CLAUDE.md / §4: unknown matched model (still connected) uses the HushMark, no photo.
             markGlyph(size: 118, color: colorScheme == .dark ? .white.opacity(0.32) : Theme.Brand.navy.opacity(0.32))
                 .frame(height: photoHeight)
+                .opacity(isConnecting ? 0.3 : 1)
+                .saturation(isConnecting ? 0 : 1)
         }
     }
 
@@ -367,6 +458,7 @@ struct ExpandedCard<ModeControls: View>: View {
                 .foregroundStyle(eyebrowColor)
             Text(value)
                 .font(Theme.Fonts.batteryValue)
+                .contentTransition(.numericText())
                 .foregroundStyle(valueColor)
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
@@ -374,6 +466,8 @@ struct ExpandedCard<ModeControls: View>: View {
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
                     .fill(isLow ? Color.white : Theme.Brand.orange)
                     .frame(width: max(0, min(1, fraction)) * 52)
+                    // §9.5 "Battery value": "bar width animates 300 ms ease out".
+                    .animation(reduceMotion ? .easeInOut(duration: 0.16) : .easeOut(duration: 0.3), value: fraction)
             }
             .frame(width: 52, height: 4)
         }
@@ -391,30 +485,90 @@ struct ExpandedCard<ModeControls: View>: View {
                 // issue the number's own drop shadow addresses for the photo).
                 .strokeBorder(isLow || colorScheme == .light ? Theme.Brand.orange : Theme.Semantic.glassStroke, lineWidth: 1)
         )
+        // §9.5 "Battery crossing 15%": "Chip color crossfades to orange over 250 ms, then the
+        // pulse starts" — the fill/border/ink swaps above are already driven by `isLow`, so a
+        // single animation binding on it crossfades the whole chip together.
+        .animation(reduceMotion ? .easeInOut(duration: 0.16) : .easeInOut(duration: 0.25), value: isLow)
         .shadow(color: isLow ? Theme.Brand.orange.opacity(lowBatteryPulse ? 0.5 : 0) : .clear, radius: 11)
         .onAppear {
-            guard isLow else { return }
+            guard isLow, !reduceMotion else { return }
             withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { lowBatteryPulse = true }
         }
     }
 
     // MARK: - Name block
 
+    @ViewBuilder
     private var nameBlock: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(state.deviceName.isEmpty ? "No headphones" : state.deviceName)
-                .font(Theme.Fonts.deviceName)
-                .tracking(-0.2)
-                .foregroundStyle(Theme.Semantic.textPrimary)
-            HStack(spacing: 7) {
-                Circle()
-                    .fill(Theme.Brand.orange)
-                    .frame(width: 7, height: 7)
-                    .shadow(color: Theme.Brand.orange.opacity(0.85), radius: 4)
-                Text(content.subtitleText)
-                    .font(Theme.Fonts.subText)
-                    .foregroundStyle(Theme.Semantic.textSecondary)
+        switch condition {
+        case .noDevice:
+            VStack(alignment: .leading, spacing: 4) {
+                Text("No headphones")
+                    .font(Theme.Fonts.deviceName)
+                    .tracking(-0.2)
+                    .foregroundStyle(Theme.Semantic.textPrimary)
+                // §5: "grey dot" here, not the usual orange one — and the whole line is omitted
+                // when nothing has ever matched.
+                if let lastSeen = CardConditionResolver.lastSeenText(lastMatchedProfileDisplayName: lastMatchedProfileDisplayName) {
+                    HStack(spacing: 7) {
+                        Circle()
+                            .fill(Color.white.opacity(0.35))
+                            .frame(width: 7, height: 7)
+                        Text(lastSeen)
+                            .font(Theme.Fonts.subText)
+                            .foregroundStyle(Theme.Semantic.textSecondary)
+                    }
+                }
             }
+        case .connecting:
+            VStack(alignment: .leading, spacing: 4) {
+                Text(state.deviceName)
+                    .font(Theme.Fonts.deviceName)
+                    .tracking(-0.2)
+                    .foregroundStyle(Theme.Semantic.textPrimary)
+                HStack(spacing: 7) {
+                    ConnectingPulsingDot()
+                    Text("Connecting…")
+                        .font(Theme.Fonts.subText)
+                        .foregroundStyle(Theme.Semantic.textSecondary)
+                }
+            }
+        case .controlsUnavailable, .lowBattery, .connected:
+            VStack(alignment: .leading, spacing: 4) {
+                Text(state.deviceName.isEmpty ? "No headphones" : state.deviceName)
+                    .font(Theme.Fonts.deviceName)
+                    .tracking(-0.2)
+                    .foregroundStyle(Theme.Semantic.textPrimary)
+                HStack(spacing: 7) {
+                    Circle()
+                        .fill(Theme.Brand.orange)
+                        .frame(width: 7, height: 7)
+                        .shadow(color: Theme.Brand.orange.opacity(0.85), radius: 4)
+                    Text(content.subtitleText)
+                        .font(Theme.Fonts.subText)
+                        .foregroundStyle(Theme.Semantic.textSecondary)
+                }
+            }
+        }
+    }
+
+    // MARK: - Bottom section (mode buttons / connecting skeleton / no-device actions)
+
+    @ViewBuilder
+    private var bottomSection: some View {
+        switch condition {
+        case .noDevice:
+            NoHeadphonesActions(
+                dock: dock, onReconnectTapped: onReconnectTapped,
+                onOpenBluetoothSettingsTapped: onOpenBluetoothSettingsTapped
+            )
+        case .connecting:
+            ConnectingPlaceholder(dock: dock)
+        case .controlsUnavailable, .lowBattery, .connected:
+            ModeButtonsSection(
+                state: state, dock: dock, isModeVerified: isModeVerified,
+                supportsNoiseControl: supportsNoiseControl, onSelectNoiseMode: onSelectNoiseMode
+            )
         }
     }
 
@@ -422,12 +576,12 @@ struct ExpandedCard<ModeControls: View>: View {
 
     private var footer: some View {
         HStack {
-            Text(content.footerLeftText)
+            Text(CardConditionResolver.footerLeftText(for: condition))
                 .font(Theme.Fonts.eyebrow)
                 .tracking(1.5)
                 .foregroundStyle(Theme.Semantic.textSecondary.opacity(0.8))
             Spacer(minLength: 0)
-            Text(content.footerRightText)
+            Text(CardConditionResolver.footerRightText(for: condition))
                 .font(Theme.Fonts.eyebrow)
                 .tracking(1.5)
                 .foregroundStyle(Theme.Semantic.textSecondary.opacity(0.8))
@@ -435,96 +589,129 @@ struct ExpandedCard<ModeControls: View>: View {
     }
 }
 
-// MARK: - Previews (design/DESIGN_GUIDE.md §4; design/reference/01, 02, 30-32)
+// MARK: - Previews (design/DESIGN_GUIDE.md §4/§5; design/reference/01, 02, 19-21, 27-29, 30-32)
 
 #if DEBUG
-/// Stand-in for the real mode-controls slot NotchView actually passes in — these previews are
-/// ExpandedCard's own, decoupled from NotchView's private modeSegments/statusCaption, but still
-/// need *something* visibly marking where that slot sits.
-private struct PreviewModeControlsSlot: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("MODE CONTROLS SLOT")
-                .font(.system(size: 9, weight: .bold))
-                .tracking(1)
-                .foregroundStyle(.white.opacity(0.4))
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                .foregroundStyle(.white.opacity(0.3))
-                .frame(height: 52)
-                .overlay(Text("existing segmented control").font(.system(size: 10)).foregroundStyle(.white.opacity(0.5)))
-        }
-    }
-}
-
 @MainActor
-private func previewState(connected: Bool = true, battery: Int? = 82, hasPhoto: Bool = true) -> HeadphoneState {
+private func previewState(
+    connected: Bool = true, battery: Int? = 82, hasPhoto: Bool = true,
+    noiseMode: NoiseMode = .anc, modelNumber: String = "770NC", deviceName: String = "JBL Tune 770NC"
+) -> HeadphoneState {
     let state = HeadphoneState()
     state.connection = connected ? .connected : .disconnected
-    state.deviceName = connected ? "JBL Tune 770NC" : ""
-    state.modelNumberText = connected && hasPhoto ? "770NC" : ""
-    state.photoAssetNames = connected && hasPhoto ? HeadphonePhotoAssetNames(black: "Tune770Black", white: "Tune770White") : nil
-    state.batteryPercent = battery
+    state.deviceName = connected ? deviceName : ""
+    state.modelNumberText = connected && hasPhoto ? modelNumber : ""
+    state.photoAssetNames = connected && hasPhoto ? HeadphonePhotoAssetNames(black: "Tune\(modelNumber.prefix(3))Black", white: "Tune\(modelNumber.prefix(3))White") : nil
+    state.batteryPercent = connected ? battery : nil
+    state.noiseMode = connected ? noiseMode : .unknown
     return state
 }
 
+private let previewVerified: (CommandableNoiseMode) -> Bool = { $0 != .off }
+private let previewUnverified: (CommandableNoiseMode) -> Bool = { _ in false }
+
+private func previewCard(
+    _ state: HeadphoneState, _ dock: CardDock,
+    isModeVerified: @escaping (CommandableNoiseMode) -> Bool = previewVerified,
+    supportsNoiseControl: Bool = true, lastSeen: String? = "JBL Tune 770NC"
+) -> some View {
+    ExpandedCard(
+        state: state, dock: dock, onCollapseTapped: {}, isModeVerified: isModeVerified,
+        supportsNoiseControl: supportsNoiseControl, onSelectNoiseMode: { _ in }, onReconnectTapped: {},
+        onOpenBluetoothSettingsTapped: {}, lastMatchedProfileDisplayName: lastSeen
+    )
+}
+
 #Preview("Top - Dark") {
-    ExpandedCard(state: previewState(), dock: .top, onCollapseTapped: {}) { PreviewModeControlsSlot() }
-        .padding(40).background(Color.black).preferredColorScheme(.dark)
+    previewCard(previewState(), .top).padding(40).background(Color.black).preferredColorScheme(.dark)
 }
 
 #Preview("Top - Light") {
-    ExpandedCard(state: previewState(), dock: .top, onCollapseTapped: {}) { PreviewModeControlsSlot() }
-        .padding(40).background(Color.white).preferredColorScheme(.light)
+    previewCard(previewState(), .top).padding(40).background(Color.white).preferredColorScheme(.light)
 }
 
 #Preview("Bottom - Dark") {
-    ExpandedCard(state: previewState(), dock: .bottom, onCollapseTapped: {}) { PreviewModeControlsSlot() }
-        .padding(40).background(Color.black).preferredColorScheme(.dark)
+    previewCard(previewState(), .bottom).padding(40).background(Color.black).preferredColorScheme(.dark)
 }
 
 #Preview("Bottom - Light") {
-    ExpandedCard(state: previewState(), dock: .bottom, onCollapseTapped: {}) { PreviewModeControlsSlot() }
-        .padding(40).background(Color.white).preferredColorScheme(.light)
+    previewCard(previewState(), .bottom).padding(40).background(Color.white).preferredColorScheme(.light)
 }
 
 #Preview("Left - Dark") {
-    ExpandedCard(state: previewState(), dock: .left, onCollapseTapped: {}) { PreviewModeControlsSlot() }
-        .padding(40).background(Color.black).preferredColorScheme(.dark)
+    previewCard(previewState(), .left).padding(40).background(Color.black).preferredColorScheme(.dark)
 }
 
 #Preview("Left - Light") {
-    ExpandedCard(state: previewState(), dock: .left, onCollapseTapped: {}) { PreviewModeControlsSlot() }
-        .padding(40).background(Color.white).preferredColorScheme(.light)
+    previewCard(previewState(), .left).padding(40).background(Color.white).preferredColorScheme(.light)
 }
 
 #Preview("Right - Dark") {
-    ExpandedCard(state: previewState(), dock: .right, onCollapseTapped: {}) { PreviewModeControlsSlot() }
-        .padding(40).background(Color.black).preferredColorScheme(.dark)
+    previewCard(previewState(), .right).padding(40).background(Color.black).preferredColorScheme(.dark)
 }
 
 #Preview("Right - Light") {
-    ExpandedCard(state: previewState(), dock: .right, onCollapseTapped: {}) { PreviewModeControlsSlot() }
-        .padding(40).background(Color.white).preferredColorScheme(.light)
+    previewCard(previewState(), .right).padding(40).background(Color.white).preferredColorScheme(.light)
 }
 
 #Preview("Low Battery - Dark") {
-    ExpandedCard(state: previewState(battery: 9), dock: .top, onCollapseTapped: {}) { PreviewModeControlsSlot() }
-        .padding(40).background(Color.black).preferredColorScheme(.dark)
+    previewCard(previewState(battery: 9), .top).padding(40).background(Color.black).preferredColorScheme(.dark)
 }
 
 #Preview("Low Battery - Light") {
-    ExpandedCard(state: previewState(battery: 9), dock: .top, onCollapseTapped: {}) { PreviewModeControlsSlot() }
-        .padding(40).background(Color.white).preferredColorScheme(.light)
-}
-
-#Preview("No Device - Dark") {
-    ExpandedCard(state: previewState(connected: false, battery: nil), dock: .top, onCollapseTapped: {}) { PreviewModeControlsSlot() }
-        .padding(40).background(Color.black).preferredColorScheme(.dark)
+    previewCard(previewState(battery: 9), .top).padding(40).background(Color.white).preferredColorScheme(.light)
 }
 
 #Preview("Unknown Model - Dark") {
-    ExpandedCard(state: previewState(hasPhoto: false), dock: .top, onCollapseTapped: {}) { PreviewModeControlsSlot() }
+    previewCard(previewState(hasPhoto: false), .top).padding(40).background(Color.black).preferredColorScheme(.dark)
+}
+
+#Preview("Connecting - Dark") {
+    previewCard(previewState(noiseMode: .unknown), .top).padding(40).background(Color.black).preferredColorScheme(.dark)
+}
+
+#Preview("Connecting - Light") {
+    previewCard(previewState(noiseMode: .unknown), .top).padding(40).background(Color.white).preferredColorScheme(.light)
+}
+
+#Preview("No Headphones - Dark") {
+    previewCard(previewState(connected: false, battery: nil), .top)
         .padding(40).background(Color.black).preferredColorScheme(.dark)
+}
+
+#Preview("No Headphones - Light") {
+    previewCard(previewState(connected: false, battery: nil), .top)
+        .padding(40).background(Color.white).preferredColorScheme(.light)
+}
+
+#Preview("No Headphones - Never Matched - Dark") {
+    previewCard(previewState(connected: false, battery: nil), .top, lastSeen: nil)
+        .padding(40).background(Color.black).preferredColorScheme(.dark)
+}
+
+#Preview("No Headphones - Side Dock - Dark") {
+    previewCard(previewState(connected: false, battery: nil), .left)
+        .padding(40).background(Color.black).preferredColorScheme(.dark)
+}
+
+#Preview("No Headphones - Side Dock - Light") {
+    previewCard(previewState(connected: false, battery: nil), .left)
+        .padding(40).background(Color.white).preferredColorScheme(.light)
+}
+
+#Preview("Controls Unavailable (670NC) - Dark") {
+    previewCard(
+        previewState(battery: 64, noiseMode: .anc, modelNumber: "670NC", deviceName: "JBL Tune 670NC"),
+        .top, isModeVerified: previewUnverified, supportsNoiseControl: false
+    )
+    .padding(40).background(Color.black).preferredColorScheme(.dark)
+}
+
+#Preview("Controls Unavailable (670NC) - Light") {
+    previewCard(
+        previewState(battery: 64, noiseMode: .anc, modelNumber: "670NC", deviceName: "JBL Tune 670NC"),
+        .top, isModeVerified: previewUnverified, supportsNoiseControl: false
+    )
+    .padding(40).background(Color.white).preferredColorScheme(.light)
 }
 #endif
