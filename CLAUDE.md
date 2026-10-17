@@ -9,7 +9,7 @@ macOS menu bar app for JBL Tune headphones (770NC, 670NC). Floating pill expands
 - If an image and the guide disagree, follow the guide.
 - Dashed orange outlines, wallpapers, the fake menu bar and "Finder File Edit View" text in the reference images are staging, not UI. Never draw them.
 - Use asset catalog names from the guide. No hardcoded hex values.
-- Deliberate deviations from the guide (do not "fix" these back): the cut-out tab depth is 18 pt on all docks (guide says 32 top/bottom and 30 side). The confirmed status line reads "<Mode> is currently active" instead of "<Mode> set by headphones". Ambient is labeled "Ambient", not "Ambient Aware".
+- Deliberate deviations from the guide (do not "fix" these back): the cut-out tab depth is 18 pt on all docks (guide says 32 top/bottom and 30 side). The confirmed status line reads "<Mode> is currently active" instead of "<Mode> set by headphones". Ambient is labeled "Ambient", not "Ambient Aware". The expanded card height is 500 pt (guide says about 470, which follows content). On left and right docks the mode buttons are a 2x2 grid, not the guide's stacked column. Do not "fix" these back.
 
 ## Hard safety rules (never change unless the task explicitly says so)
 - Do NOT modify WriteGuard, allowlist contents, the 500ms rate limit, the 2s confirmation timeout, RFCOMMRaceLink, allowsRFCOMMWrites, or any Bluetooth behavior during UI work.
