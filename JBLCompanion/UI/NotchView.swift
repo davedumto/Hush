@@ -30,6 +30,10 @@ struct NotchView: View {
     /// reconstructs it, so a plain value would never reflect a later display change. Drives
     /// CollapsedPill's always-black, square-top notch variant.
     let isNotched: () -> Bool
+    /// The expanded card's cut-out tab collapses the card when tapped (design/DESIGN_GUIDE.md §4)
+    /// — a closure, like the other NotchPanel-owned behaviors, since collapsing is a real window/
+    /// silhouette transition NotchPanel owns, not something NotchView can trigger by itself.
+    let onCollapseTabTapped: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
 
@@ -67,68 +71,12 @@ struct NotchView: View {
         )
     }
 
-    /// "--" for an untrusted 0% reading (BatteryReadingPolicy) — distinct from "—", which means no
-    /// reading at all.
-    private var batteryDisplayText: String {
-        if state.batteryPercentIsUnverifiedZero { return "--" }
-        return state.batteryPercent.map { "\($0)%" } ?? "—"
-    }
-
-    private var batteryRingColor: Color {
-        guard let percent = state.batteryPercent else { return .white }
-        return percent > 20 ? .green : .red
-    }
-
-    private var batteryIconName: String {
-        guard let percent = state.batteryPercent else { return "battery.0" }
-        switch percent {
-        case ..<15: return "battery.0"
-        case 15..<40: return "battery.25"
-        case 40..<65: return "battery.50"
-        case 65..<90: return "battery.75"
-        default: return "battery.100"
-        }
-    }
-
     @ViewBuilder
     private var expandedContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            header
-            Divider().overlay(Color.white.opacity(0.1))
+        // Only the top dock is reachable from live app state today — see ExpandedCard's own doc
+        // comment for why bottom/left/right exist (pure logic/previews) but aren't wired in yet.
+        ExpandedCard(state: state, dock: .top, onCollapseTapped: onCollapseTabTapped) {
             noiseControlSection
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    @ViewBuilder
-    private var header: some View {
-        HStack(spacing: 10) {
-            ZStack {
-                Circle()
-                    .fill(accent.opacity(0.16))
-                    .frame(width: 34, height: 34)
-                Image(systemName: "headphones")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(accent)
-            }
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(state.deviceName.isEmpty ? "No device" : state.deviceName)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
-
-                HStack(spacing: 4) {
-                    Image(systemName: batteryIconName)
-                        .font(.system(size: 11))
-                        .foregroundStyle(batteryRingColor)
-                    Text(batteryDisplayText)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.65))
-                }
-            }
-
-            Spacer(minLength: 0)
         }
     }
 

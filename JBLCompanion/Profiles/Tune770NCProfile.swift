@@ -15,6 +15,7 @@ struct Tune770NCProfile: DeviceProfile {
 
     // design/DESIGN_GUIDE.md §1 Headphones.
     let photoAssetNames: HeadphonePhotoAssetNames? = HeadphonePhotoAssetNames(black: "Tune770Black", white: "Tune770White")
+    let modelNumberText = "770NC"
 
     let supportsNoiseControl = true
     let allowsRFCOMMWrites = true

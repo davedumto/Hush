@@ -41,6 +41,12 @@ protocol DeviceProfile {
     /// "Unknown JBL models use the generic mark with no photo."
     var photoAssetNames: HeadphonePhotoAssetNames? { get }
 
+    /// Short model-number text for the card's top-left chip (design/DESIGN_GUIDE.md §4, "[770NC
+    /// chip]"), e.g. "770NC". Empty for a profile with no short number to show (the protocol
+    /// extension's default) — ExpandedCard hides the chip entirely rather than show an empty
+    /// capsule. CLAUDE.md: "Model names, photos and model numbers come from the matched profile."
+    var modelNumberText: String { get }
+
     /// Whether this model's noise control is wired up at all — purely a UI gate (NotchView shows
     /// "Controls not available for this model yet" when false) independent of whether RFCOMM is
     /// opened at all. The RACE channel is opened for ANY matched profile now, to listen for status
@@ -100,6 +106,7 @@ extension DeviceProfile {
     /// Safe by construction: a missing photo only ever falls back to the generic mark, never shows
     /// a wrong one, so this is fine as a silent default (unlike allowsRFCOMMWrites).
     var photoAssetNames: HeadphonePhotoAssetNames? { nil }
+    var modelNumberText: String { "" }
 
     /// Every CommandableNoiseMode this profile marks verified, provided it actually has a command
     /// frame (CommandableNoiseMode.commandFrame — Off never will). compactMap is

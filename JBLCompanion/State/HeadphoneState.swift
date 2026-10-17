@@ -77,6 +77,9 @@ final class HeadphoneState {
     /// falls back to the generic mark; CLAUDE.md: "Unknown JBL models use the generic mark with
     /// no photo").
     var photoAssetNames: HeadphonePhotoAssetNames?
+    /// Mirrors the connected profile's DeviceProfile.modelNumberText — empty while disconnected or
+    /// for a matched profile with no short number (ExpandedCard hides the chip when empty).
+    var modelNumberText: String = ""
     var batteryPercent: Int?
     /// True when the last battery reading was an untrusted 0% (BatteryReadingPolicy), shown as
     /// "--" in the card — distinct from `batteryPercent == nil`, which means no reading at all.

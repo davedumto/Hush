@@ -52,6 +52,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        #if DEBUG
+        if PreviewSnapshotHarness.runIfRequested() {
+            NSApplication.shared.terminate(nil)
+            return
+        }
+        #endif
+
         verifyRequiredFonts()
 
         // Created first, before anything else in this method that could fail — a plain AppKit
@@ -251,6 +258,7 @@ extension AppDelegate: ClassicConnectionMonitorDelegate {
         headphoneState.connection = .connected
         headphoneState.deviceName = profile.displayName
         headphoneState.photoAssetNames = profile.photoAssetNames
+        headphoneState.modelNumberText = profile.modelNumberText
         headphoneState.noiseModeEventMapVerified = profile.eventMapVerified
         headphoneState.lastUpdated = Date()
 
@@ -268,6 +276,7 @@ extension AppDelegate: ClassicConnectionMonitorDelegate {
         headphoneState.batteryPercentIsUnverifiedZero = false
         headphoneState.deviceName = ""
         headphoneState.photoAssetNames = nil
+        headphoneState.modelNumberText = ""
         headphoneState.pendingNoiseMode = nil
         headphoneState.noiseModeConfirmationTimedOut = false
         headphoneState.noiseMode = .unknown

@@ -21,6 +21,7 @@ struct Tune670NCProfile: DeviceProfile {
 
     // design/DESIGN_GUIDE.md §1 Headphones.
     let photoAssetNames: HeadphonePhotoAssetNames? = HeadphonePhotoAssetNames(black: "Tune670Black", white: "Tune670White")
+    let modelNumberText = "670NC"
 
     // Hardware-verified directly on the 670NC (~/jbl-recon/rfcomm_send_test_670nc.swift): sending
     // the 770NC's ANC (0A 01 00), TalkThru (0A 09 04), and Ambient Aware (0A 0A 04) command frames

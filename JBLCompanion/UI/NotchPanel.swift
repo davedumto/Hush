@@ -67,6 +67,21 @@ final class NotchPanel: NSPanel {
     private let hoverCloseDelay: TimeInterval = 0.4
     private let expandedTopInset: CGFloat = 16
 
+    /// Extra transparent room reserved, at rest, around both the pill and the card so their own
+    /// shadows/glows (CollapsedPill, ExpandedCard — both reach past their own bounds) aren't
+    /// clipped by the window's edge. Symmetric on the sides; reserved below only, since nothing
+    /// needs to render above a top-anchored shape. Deliberately a flat constant, not computed
+    /// from the real shadow radii — kept minimal pending full edge docking.
+    private static let shadowMargin: CGFloat = 40
+
+    private static func restingEnvelopeSize(for contentSize: CGSize) -> CGSize {
+        CGSize(width: contentSize.width + shadowMargin * 2, height: contentSize.height + shadowMargin)
+    }
+
+    /// ExpandedCard's own fixed width (design/DESIGN_GUIDE.md §4/§10) — only the top dock is live
+    /// today (see ExpandedCard's own doc comment), so this is always the horizontal-dock width.
+    private static let expandedCardWidth: CGFloat = 374
+
     init(
         headphoneState: HeadphoneState, onSelectNoiseMode: @escaping (CommandableNoiseMode) -> Void,
         isModeVerified: @escaping (CommandableNoiseMode) -> Bool,
@@ -84,7 +99,7 @@ final class NotchPanel: NSPanel {
         self.currentSize = initialGeometry.collapsedSize
 
         super.init(
-            contentRect: initialGeometry.frame(for: initialGeometry.collapsedSize),
+            contentRect: initialGeometry.frame(for: Self.restingEnvelopeSize(for: initialGeometry.collapsedSize)),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -105,16 +120,20 @@ final class NotchPanel: NSPanel {
             rootView: NotchView(
                 state: headphoneState, uiState: uiState, collapsedSize: initialGeometry.collapsedSize,
                 onSelectNoiseMode: onSelectNoiseMode, isModeVerified: isModeVerified,
-                supportsNoiseControl: supportsNoiseControl, isNotched: { [weak self] in self?.isNotched ?? false }
+                supportsNoiseControl: supportsNoiseControl, isNotched: { [weak self] in self?.isNotched ?? false },
+                onCollapseTabTapped: { [weak self] in self?.handleTabTap() }
             )
         )
-        // NSHostingView does not clip its own content to its frame by default — if the SwiftUI
-        // content ever wants more room than it's given, it must never visibly spill past the
-        // silhouette's edges, even if the size estimate below is ever imperfect.
+        // NSHostingView does not clip its own content to its frame by default. `hosting` itself
+        // stays sized to the pill/card's own exact content size (unchanged, still positioned by
+        // the same origin math below) — the surrounding `container` is the one sized to the
+        // margined envelope, so CollapsedPill/ExpandedCard's own shadows have real window room to
+        // bleed into. masksToBounds stays off deliberately: it would clip that intentional
+        // overflow right back off, same as it would an oversized estimate.
         hosting.wantsLayer = true
-        hosting.layer?.masksToBounds = true
 
-        let container = NSView(frame: NSRect(origin: .zero, size: initialGeometry.collapsedSize))
+        let initialEnvelope = Self.restingEnvelopeSize(for: initialGeometry.collapsedSize)
+        let container = NSView(frame: NSRect(origin: .zero, size: initialEnvelope))
         container.wantsLayer = true
         container.addSubview(silhouette)
         container.addSubview(hosting)
@@ -123,13 +142,13 @@ final class NotchPanel: NSPanel {
         silhouette.onTap = { [weak self] in self?.handleTap() }
         silhouette.onHoverChange = { [weak self] hovering in self?.handleHover(hovering) }
 
-        layoutContent(for: initialGeometry.collapsedSize, envelopeSize: initialGeometry.collapsedSize)
+        layoutContent(for: initialGeometry.collapsedSize, envelopeSize: initialEnvelope)
         // Give the silhouette an initial path immediately — otherwise it stays empty (zero
         // frame) until the first expand/collapse transition ever runs.
         silhouette.resize(
             to: initialGeometry.collapsedSize, from: initialGeometry.collapsedSize,
             startGap: initialGeometry.floatingGap, targetGap: initialGeometry.floatingGap,
-            envelopeSize: initialGeometry.collapsedSize, reduceMotion: true, completion: {}
+            envelopeSize: initialEnvelope, reduceMotion: true, completion: {}
         )
 
         installMonitors()
@@ -202,6 +221,14 @@ final class NotchPanel: NSPanel {
         } else {
             expand()
         }
+    }
+
+    /// The expanded card's own cut-out tab (design/DESIGN_GUIDE.md §4) always collapses — unlike
+    /// `handleTap`, which toggles, the tab is only ever visible/tappable while already expanded.
+    private func handleTabTap() {
+        autoCollapseWorkItem?.cancel()
+        autoCollapseWorkItem = nil
+        collapse()
     }
 
     private func scheduleAutoCollapse(after seconds: TimeInterval) {
@@ -379,9 +406,14 @@ final class NotchPanel: NSPanel {
     }
 
     private func expandedSize(for geometry: IslandGeometry) -> CGSize {
-        let width = geometry.expandedWidth
+        // ExpandedCard's own fixed width, not IslandSize's compact/spacious/custom options —
+        // those sized the old, much wider card this app no longer has. Still reuses
+        // IslandGeometry's own height capping/screen-bounds logic, just overrides the width it
+        // would otherwise have returned alongside that height.
+        let width = min(Self.expandedCardWidth, geometry.screen.width - 24)
         let contentHeight = measuredExpandedContentHeight(width: width)
-        return geometry.expandedSize(contentHeight: contentHeight, topInset: expandedTopInset)
+        let sized = geometry.expandedSize(contentHeight: contentHeight, topInset: expandedTopInset)
+        return CGSize(width: width, height: sized.height)
     }
 
     /// Measures the real height the expanded card's SwiftUI content needs at `width`, instead of
@@ -394,7 +426,8 @@ final class NotchPanel: NSPanel {
             rootView: NotchView(
                 state: headphoneState, uiState: probeState, collapsedSize: geometry.collapsedSize,
                 onSelectNoiseMode: { _ in }, isModeVerified: isModeVerified,
-                supportsNoiseControl: supportsNoiseControl, isNotched: { [weak self] in self?.isNotched ?? false }
+                supportsNoiseControl: supportsNoiseControl, isNotched: { [weak self] in self?.isNotched ?? false },
+                onCollapseTabTapped: {}
             )
         )
         probe.frame = CGRect(x: 0, y: 0, width: max(width, 1), height: 1)
@@ -448,9 +481,12 @@ final class NotchPanel: NSPanel {
         ) { [weak self] in
             guard let self, generation == self.presentGeneration else { return }
             self.isAnimating = false
-            // 2. Settle the window back down to exactly the target size.
-            self.setFrame(self.geometry.frame(for: target), display: true)
-            self.layoutContent(for: target, envelopeSize: target)
+            // 2. Settle the window back down to the target size, plus the resting shadow margin
+            // (restingEnvelopeSize) — not exactly the target, or CollapsedPill/ExpandedCard's own
+            // shadows would have nowhere to bleed into and clip right back at the window edge.
+            let restEnvelope = Self.restingEnvelopeSize(for: target)
+            self.setFrame(self.geometry.frame(for: restEnvelope), display: true)
+            self.layoutContent(for: target, envelopeSize: restEnvelope)
             // Shrinking silhouette's frame above does NOT rescale/reposition its existing path —
             // that path was computed relative to the larger envelope frame it had while
             // animating, so left alone it now sits offset toward one corner of the new, smaller
@@ -459,15 +495,16 @@ final class NotchPanel: NSPanel {
             // final size recomputes the path for the frame it actually has now.
             self.silhouette.resize(
                 to: target, from: target, startGap: targetGap, targetGap: targetGap,
-                envelopeSize: target, reduceMotion: true, completion: {}
+                envelopeSize: restEnvelope, reduceMotion: true, completion: {}
             )
             self.revealContent()
         }
     }
 
-    /// Centers the silhouette and the SwiftUI content within the (possibly larger-than-target)
-    /// envelope window, both using the same size for now — content stays hidden until the shape
-    /// settles (see `revealContent`), so a mid-resize mismatch is never visible.
+    /// Centers the silhouette and the SwiftUI content within the (always at-least-as-large-as-
+    /// target, thanks to restingEnvelopeSize's shadow margin even at rest) envelope window —
+    /// content stays hidden until the shape settles (see `revealContent`), so a mid-resize
+    /// mismatch is never visible.
     ///
     /// `silhouette.resize(...)` also sets its own frame to `envelopeSize` while it's actively
     /// animating, but nothing resets it once the animation finishes and the window shrinks back
