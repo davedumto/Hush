@@ -189,6 +189,7 @@ final class NotchPanel: NSPanel {
         setFrame(windowFrame(for: initialEnvelope), display: false)
         logger.info("NotchPanel created. frame=\(NSStringFromRect(self.frame), privacy: .public) edge=\(self.edge.rawValue, privacy: .public)")
         silhouette.setFillColor(currentSilhouetteFillColor())
+        silhouette.setEdgeVisible(false) // starts collapsed, no orange outline until expanded.
         // Give the silhouette an initial path immediately — otherwise it stays empty (zero
         // frame) until the first expand/collapse transition ever runs. Only .top ever floats as
         // a capsule with a gap; the other three edges are always flush-docked pills.
@@ -607,6 +608,9 @@ final class NotchPanel: NSPanel {
         // for most of the animation (SwiftUI content stays hidden until revealContent), so it
         // has to already be correct, not just end up correct once the real content fades in.
         silhouette.setFillColor(currentSilhouetteFillColor())
+        // The orange outline is card-only, visible for the whole expand swing, gone for the
+        // whole collapse swing, not just once each settles.
+        silhouette.setEdgeVisible(expanded)
 
         // 1. Make the window big enough for the whole swing, then center both views within it.
         setFrame(windowFrame(for: envelope), display: true)
@@ -657,6 +661,7 @@ final class NotchPanel: NSPanel {
         currentSize = target
         presentGeneration += 1 // supersede any in-flight animated present()
         silhouette.setFillColor(currentSilhouetteFillColor())
+        silhouette.setEdgeVisible(expanded)
         let restEnvelope = Self.restingEnvelopeSize(for: target, edge: edge)
         setFrame(windowFrame(for: restEnvelope), display: true)
         layoutContent(for: target, envelopeSize: restEnvelope)

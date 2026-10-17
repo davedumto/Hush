@@ -49,9 +49,25 @@ final class NotchSilhouetteView: NSView {
         // light, black in dark) — see `setFillColor`.
 
         edgeLayer.fillColor = nil
-        edgeLayer.strokeColor = NSColor(calibratedRed: 1.0, green: 0.45, blue: 0.05, alpha: 0.9).cgColor
+        edgeLayer.strokeColor = nil // starts hidden — see setEdgeVisible; collapsed never shows it.
         edgeLayer.lineWidth = 1.5
         layer?.addSublayer(edgeLayer)
+    }
+
+    private static let edgeOrange = NSColor(calibratedRed: 1.0, green: 0.45, blue: 0.05, alpha: 0.9).cgColor
+
+    /// The orange outline is a card-only accent (ExpandedCard draws its own copy of it once real
+    /// content is showing — see that view's own doc comment) — the collapsed pill has its own,
+    /// much subtler SwiftUI-level border (CollapsedPill's `borderColor`) and was never meant to
+    /// show this orange one at all. Call before every resize, same as `setFillColor`, so the
+    /// stroke is already in the right state for the whole swing, not just once it settles.
+    func setEdgeVisible(_ visible: Bool) {
+        let target: CGColor? = visible ? Self.edgeOrange : nil
+        guard edgeLayer.strokeColor != target else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        edgeLayer.strokeColor = target
+        CATransaction.commit()
     }
 
     required init?(coder: NSCoder) {
