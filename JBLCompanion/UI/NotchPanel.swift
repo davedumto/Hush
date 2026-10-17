@@ -67,7 +67,6 @@ final class NotchPanel: NSPanel {
     private var offset: CGFloat
 
     private var currentSize: CGSize
-    private var isAnimating = false
     /// Bumped on every present() call; a stale completion whose generation no longer matches is
     /// dropped instead of applying its (now outdated) frame/content, which is what let a
     /// superseded transition leave the window sized for one state while content rendered for
@@ -600,6 +599,7 @@ final class NotchPanel: NSPanel {
         let target = expanded ? Self.expandedSize(for: edge, geometry: geometry) : Self.collapsedSize(for: edge, geometry: geometry)
         guard target != currentSize else {
             uiState.isExpanded = expanded
+            uiState.isAnimating = false
             completion()
             return
         }
@@ -678,7 +678,11 @@ final class NotchPanel: NSPanel {
         // once the swing settles.
         silhouette.alphaValue = 0
 
-        isAnimating = true
+        // Set synchronously, not inside the withAnimation block below: NotchView's pill-visibility
+        // logic (`isPillVisible`) reads this directly, via a `.transaction { $0.animation = nil }`
+        // that already strips any animation from that read regardless — it only has to be true
+        // before the swing's first frame renders, not animated itself.
+        uiState.isAnimating = true
         let cardTransitionKind = expanded
             ? MotionConstants.expandTransitionKind(reduceMotion: reduceMotion)
             : MotionConstants.collapseTransitionKind(reduceMotion: reduceMotion)
@@ -686,7 +690,7 @@ final class NotchPanel: NSPanel {
             uiState.isExpanded = expanded
         } completion: { [weak self] in
             guard let self, generation == self.presentGeneration else { return }
-            self.isAnimating = false
+            self.uiState.isAnimating = false
             // Settle the window back down to the target size, plus the resting shadow margin
             // (restingEnvelopeSize) — not exactly the target, or CollapsedPill/ExpandedCard's own
             // shadows would have nowhere to bleed into and clip right back at the window edge.
@@ -717,6 +721,11 @@ final class NotchPanel: NSPanel {
         let target = expanded ? Self.expandedSize(for: edge, geometry: geometry) : Self.collapsedSize(for: edge, geometry: geometry)
         currentSize = target
         presentGeneration += 1 // supersede any in-flight animated present()
+        // That supersession means an in-flight present()'s own completion handler (the only other
+        // place this clears) will never fire — without resetting it here too, interrupting an
+        // animated swing with an edge change or a screen change could leave this stuck true
+        // forever, hiding the pill even once correctly settled back at rest.
+        uiState.isAnimating = false
         silhouette.setFillColor(currentSilhouetteFillColor())
         silhouette.setEdgeVisible(expanded)
         let restEnvelope = Self.restingEnvelopeSize(for: target, edge: edge)

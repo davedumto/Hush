@@ -51,6 +51,14 @@ extension DockEdge {
 @MainActor
 final class NotchUIState {
     var isExpanded: Bool = false
+    /// True for the whole duration of an expand/collapse swing (set in NotchPanel.present(),
+    /// cleared once it settles) — NotchView's own pill-visibility logic needs this in addition to
+    /// `isExpanded`: `isExpanded` flips to its new value at the very *start* of a swing, not once
+    /// it finishes, so on a collapse specifically "not expanded" is already true for the whole
+    /// ~280ms the card is still visibly shrinking away on top of the pill. Revealing the pill
+    /// right then showed it alongside the still-shrinking card the entire time, not just once the
+    /// card was actually gone.
+    var isAnimating: Bool = false
 }
 
 /// Just the island's content — collapsed glyph+ring or the expanded card. The shape itself
@@ -119,8 +127,8 @@ struct NotchView: View {
         // stop being animated, not the whole crossfade.
         ZStack(alignment: dockEdge().edgeAlignment) {
             collapsedContent
-                .opacity(uiState.isExpanded ? 0 : 1)
-                .allowsHitTesting(!uiState.isExpanded)
+                .opacity(isPillVisible ? 1 : 0)
+                .allowsHitTesting(isPillVisible)
                 .transaction { $0.animation = nil }
 
             if uiState.isExpanded {
@@ -136,6 +144,14 @@ struct NotchView: View {
         // the whole swing — see NotchPanel.present()'s own doc comment on `contentLayoutSize`).
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.clear)
+    }
+
+    /// On expand, hide immediately — `isExpanded` flipping to true is reason enough on its own.
+    /// On collapse, `isExpanded` flips to false at the very *start* of the swing too, well before
+    /// the card has actually finished shrinking away, so that alone isn't enough: wait for
+    /// `isAnimating` to clear as well, so the pill only reappears once the card is actually gone.
+    private var isPillVisible: Bool {
+        !uiState.isExpanded && !uiState.isAnimating
     }
 
     /// §9.1 point 2 / §9.2 point 2: anchored scale + fade. §9.6: "No scale, no blur, no overshoot"
