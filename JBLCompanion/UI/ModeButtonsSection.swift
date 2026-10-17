@@ -46,29 +46,26 @@ struct ModeButtonsSection: View {
     /// (off, anc, talkThru, ambientAware) puts TalkThru before Ambient, which doesn't match.
     private static let displayOrder: [CommandableNoiseMode] = [.off, .anc, .ambientAware, .talkThru]
 
+    /// Row docks (top/bottom): one row of 4. Side docks: a 2x2 grid, not a 4-high stack — a
+    /// column of 4 (the guide's own spec) ran noticeably taller than the card's fixed height can
+    /// actually hold; flexing into two rows of two roughly halves the space the buttons need
+    /// without losing anything (the content itself doesn't care about the outer arrangement, see
+    /// ModeButtonView's unified `content` below).
     @ViewBuilder
     private var buttons: some View {
-        let layout = isVertical
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 5))
-            : AnyLayout(HStackLayout(spacing: 6))
-        layout {
-            ForEach(Self.displayOrder, id: \.self) { mode in
-                ModeButtonView(
-                    mode: mode, dock: dock, namespace: modeFill,
-                    resolvedState: ModeButtonResolver.state(
-                        for: mode, isModeVerified: isModeVerified(mode),
-                        currentMode: state.noiseMode, pendingMode: state.pendingNoiseMode
-                    ),
-                    isInteractive: ModeButtonResolver.isInteractive(
-                        for: mode, isModeVerified: isModeVerified(mode),
-                        currentMode: state.noiseMode, pendingMode: state.pendingNoiseMode
-                    ),
-                    pendingNoiseMode: state.pendingNoiseMode,
-                    noiseModeConfirmationTimedOut: state.noiseModeConfirmationTimedOut,
-                    onSelect: { onSelectNoiseMode(mode) }
-                )
+        Group {
+            if isVertical {
+                Grid(horizontalSpacing: 6, verticalSpacing: 5) {
+                    GridRow { buttonView(Self.displayOrder[0]); buttonView(Self.displayOrder[1]) }
+                    GridRow { buttonView(Self.displayOrder[2]); buttonView(Self.displayOrder[3]) }
+                }
+            } else {
+                HStack(spacing: 6) {
+                    ForEach(Self.displayOrder, id: \.self) { buttonView($0) }
+                }
             }
         }
+        .frame(maxWidth: .infinity)
         // Ties the sliding-fill matchedGeometryEffect (and the old button's fade back to
         // available) to the one spring the guide specifies for a confirmation — §9.3's
         // `Animation.spring(response: 0.30, dampingFraction: 0.82)`. Bound to `noiseMode`
@@ -78,6 +75,23 @@ struct ModeButtonsSection: View {
         .animation(
             reduceMotionAnimation ?? .spring(response: 0.30, dampingFraction: 0.82),
             value: state.noiseMode
+        )
+    }
+
+    private func buttonView(_ mode: CommandableNoiseMode) -> some View {
+        ModeButtonView(
+            mode: mode, dock: dock, namespace: modeFill,
+            resolvedState: ModeButtonResolver.state(
+                for: mode, isModeVerified: isModeVerified(mode),
+                currentMode: state.noiseMode, pendingMode: state.pendingNoiseMode
+            ),
+            isInteractive: ModeButtonResolver.isInteractive(
+                for: mode, isModeVerified: isModeVerified(mode),
+                currentMode: state.noiseMode, pendingMode: state.pendingNoiseMode
+            ),
+            pendingNoiseMode: state.pendingNoiseMode,
+            noiseModeConfirmationTimedOut: state.noiseModeConfirmationTimedOut,
+            onSelect: { onSelectNoiseMode(mode) }
         )
     }
 
@@ -123,9 +137,8 @@ private struct ModeButtonView: View {
     var body: some View {
         Button(action: onSelect) {
             content
-                .frame(maxWidth: .infinity, alignment: isVertical ? .leading : .center)
+                .frame(maxWidth: .infinity)
                 .frame(height: isVertical ? 40 : 52)
-                .padding(isVertical ? 12 : 0)
                 .background {
                     // The sliding orange fill (§9.3): a single shape shared across all four
                     // buttons via matchedGeometryEffect, so it travels between them instead of
@@ -160,43 +173,30 @@ private struct ModeButtonView: View {
         .animation(.easeOut(duration: 0.18), value: isHovered)
     }
 
+    /// One layout for every dock now that side docks flex into a 2x2 grid instead of a 4-high
+    /// stack (ModeButtonsSection.buttons) — a grid cell and a row-of-4 cell are both roughly as
+    /// wide as they are tall, so the same "icon above label" content reads correctly in either.
     @ViewBuilder
     private var content: some View {
-        if isVertical {
-            HStack(spacing: 10) {
-                iconSlot
-                Text(mode.displayText)
-                    .font(Theme.Fonts.modeLabel(sideDock: true))
-                    .foregroundStyle(.white.opacity(labelOpacity))
-                Spacer(minLength: 0)
-                if resolvedState == .disabled {
+        VStack(spacing: 5) {
+            if resolvedState == .disabled {
+                HStack(spacing: 3) {
+                    Image("IconLock")
+                        .renderingMode(.template)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 10, height: 10)
                     Text("SOON")
-                        .font(Theme.Fonts.soonTag(sideDock: true))
+                        .font(Theme.Fonts.soonTag(sideDock: isVertical))
                         .tracking(0.6)
-                        .foregroundStyle(.white.opacity(0.5))
                 }
+                .foregroundStyle(.white.opacity(0.55))
+            } else {
+                iconSlot
             }
-        } else {
-            VStack(spacing: 5) {
-                if resolvedState == .disabled {
-                    HStack(spacing: 3) {
-                        Image("IconLock")
-                            .renderingMode(.template)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 10, height: 10)
-                        Text("SOON")
-                            .font(Theme.Fonts.soonTag())
-                            .tracking(0.6)
-                    }
-                    .foregroundStyle(.white.opacity(0.55))
-                } else {
-                    iconSlot
-                }
-                Text(mode.displayText)
-                    .font(Theme.Fonts.modeLabel())
-                    .foregroundStyle(.white.opacity(labelOpacity))
-            }
+            Text(mode.displayText)
+                .font(Theme.Fonts.modeLabel(sideDock: isVertical))
+                .foregroundStyle(.white.opacity(labelOpacity))
         }
     }
 
@@ -206,13 +206,7 @@ private struct ModeButtonView: View {
         case .pending:
             PendingRingView()
         case .disabled:
-            // Side docks only — row docks fold the lock into the "SOON" row above (see `content`).
-            Image("IconLock")
-                .renderingMode(.template)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 14, height: 14)
-                .foregroundStyle(.white.opacity(0.4))
+            EmptyView() // unreachable — content() shows the lock+SOON row instead, never this.
         default:
             Image(iconAssetName)
                 .renderingMode(.template)
