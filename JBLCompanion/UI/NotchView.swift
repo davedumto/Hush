@@ -98,10 +98,6 @@ struct NotchView: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// design/DESIGN_GUIDE.md §9.1 point 5 "Photo flight": owned by this common ancestor and
-    /// threaded into both CollapsedPill and ExpandedCard, so `matchedGeometryEffect` can morph the
-    /// pill's own photo into the hero photo across the expand/collapse transition below.
-    @Namespace private var photoFlight
 
     var body: some View {
         // A ZStack, not a plain Group — §9.1/§9.2 need the outgoing and incoming view to coexist
@@ -122,14 +118,20 @@ struct NotchView: View {
         .background(Color.clear)
     }
 
-    /// §9.1 point 2 / §9.2 point 2: anchored scale + fade (+ blur). §9.6: "No scale, no blur, no
-    /// overshoot" under Reduce Motion — a plain opacity crossfade instead.
+    /// §9.1 point 2 / §9.2 point 2: anchored scale + fade. §9.6: "No scale, no blur, no overshoot"
+    /// under Reduce Motion — a plain opacity crossfade instead.
+    ///
+    /// No `.blur()` here, despite the guide's own "blur 10 to blur 0": NotchPanel's content view
+    /// hierarchy runs with `masksToBounds = false` on purpose (CollapsedPill/ExpandedCard's own
+    /// shadows need real room to bleed past their nominal frame), and a `.blur()` transition bleeds
+    /// exactly the same way, uncontained, into whatever's behind the window — a visibly broken,
+    /// semi-transparent smear well past the card's own bounds instead of a soft edge. Scale + fade
+    /// alone already reads as the card growing in; it just doesn't start in soft focus.
     private var cardTransition: AnyTransition {
         guard !reduceMotion else { return .opacity }
         return AnyTransition
             .scale(scale: MotionConstants.cardTransitionScale, anchor: dockEdge().edgeUnitPoint)
             .combined(with: .opacity)
-            .combined(with: .cardBlurIn)
     }
 
     /// §9.1 point 4 / §9.2 point 3: "the pill fades out/in and scales to/from 0.5." Plain opacity
@@ -142,7 +144,7 @@ struct NotchView: View {
     @ViewBuilder
     private var collapsedContent: some View {
         let size = collapsedSize()
-        CollapsedPill(variant: pillVariant, photoNamespace: photoFlight)
+        CollapsedPill(variant: pillVariant)
             .frame(width: size.width, height: size.height)
     }
 
@@ -168,7 +170,7 @@ struct NotchView: View {
             state: state, dock: dockEdge().cardDock, onCollapseTapped: onCollapseTabTapped, isModeVerified: isModeVerified,
             supportsNoiseControl: supportsNoiseControl(), onSelectNoiseMode: onSelectNoiseMode,
             onReconnectTapped: onReconnectTapped, onOpenBluetoothSettingsTapped: onOpenBluetoothSettingsTapped,
-            lastMatchedProfileDisplayName: lastMatchedProfileDisplayName(), photoNamespace: photoFlight
+            lastMatchedProfileDisplayName: lastMatchedProfileDisplayName()
         )
     }
 }

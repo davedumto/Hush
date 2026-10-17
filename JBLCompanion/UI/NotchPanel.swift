@@ -606,14 +606,10 @@ final class NotchPanel: NSPanel {
         // leave the window sized for the wrong state.
         currentSize = target
 
-        // Set before the swing starts, not after: the native fill is the backdrop both the
-        // outgoing and incoming SwiftUI views (NotchView's own transition, below) sit on top of
-        // for the whole swing, so it has to already be correct, not just end up correct once
-        // something else catches up.
+        // Set before the swing starts, not after — still true even though the backdrop itself is
+        // about to be hidden below: it reappears mid-fade if a generation gets superseded, and it
+        // has to already show the right theme/color at that point, not the stale default.
         silhouette.setFillColor(currentSilhouetteFillColor())
-        // The orange outline is card-only — visible for the whole expand swing, gone for the
-        // whole collapse swing, not just once each settles.
-        silhouette.setEdgeVisible(expanded)
 
         // design/DESIGN_GUIDE.md §9.1 point 1 / §9.2 point 4 (MotionConstants.windowResizeOrdering):
         // "window first" on the way in, "window last" on the way out. The window itself always
@@ -637,27 +633,28 @@ final class NotchPanel: NSPanel {
         // which silhouette is chosen for the collapsed state. Only .top ever has a floating gap
         // at all (bottom/left/right are always flush-docked pills).
         let floatingGap = edge == .top ? geometry.floatingGap : nil
-        let startGap = expanded ? floatingGap : nil
         let targetGap = expanded ? nil : floatingGap
 
+        // The native backdrop only ever matters for the *static*, at-rest silhouette (the shape
+        // both CollapsedPill and ExpandedCard already draw their own complete background and
+        // border on top of — see CollapsedPill's own doc comment on why that split exists) and for
+        // hit-testing when nothing's animating. NotchView's own SwiftUI transition now draws and
+        // animates that whole background/content/border itself, visibly, for the entire swing —
+        // so growing the backdrop independently alongside it no longer has anything useful left to
+        // contribute, and only ever read as a second, differently-curved shape arriving on its own
+        // (an empty, bordered box, then content catching up inside it moments later). Hide it
+        // outright for the swing's duration instead, and let SwiftUI carry all of the visible
+        // motion; it reappears below, already correctly sized/colored for the new resting state,
+        // once the swing settles.
+        silhouette.alphaValue = 0
+
         isAnimating = true
-        // SwiftUI owns the actual visible card/pill transition now, driven by this `withAnimation`
-        // — the native shape's own resize below still runs in parallel, unchanged, tuned to the
-        // same guide-specified spring timings, as the backdrop both the outgoing and incoming
-        // SwiftUI views sit on top of. Same fill color throughout on both layers, so any small gap
-        // between the two independently-curved animations reads as nothing more than a solid-color
-        // surface, never a seam.
         let cardTransitionKind = expanded
             ? MotionConstants.expandTransitionKind(reduceMotion: reduceMotion)
             : MotionConstants.collapseTransitionKind(reduceMotion: reduceMotion)
-        withAnimation(cardTransitionKind.animation) {
+        withAnimation(cardTransitionKind.animation, completionCriteria: .logicallyComplete) {
             uiState.isExpanded = expanded
-        }
-
-        silhouette.resize(
-            to: target, from: start, startGap: startGap, targetGap: targetGap,
-            envelopeSize: envelope, reduceMotion: reduceMotion
-        ) { [weak self] in
+        } completion: { [weak self] in
             guard let self, generation == self.presentGeneration else { return }
             self.isAnimating = false
             // Settle the window back down to the target size, plus the resting shadow margin
@@ -669,16 +666,15 @@ final class NotchPanel: NSPanel {
             let restEnvelope = Self.restingEnvelopeSize(for: target, edge: self.edge)
             self.setFrame(self.windowFrame(for: restEnvelope), display: true)
             self.layoutContent(for: target, envelopeSize: restEnvelope)
-            // Shrinking silhouette's frame above does NOT rescale/reposition its existing path —
-            // that path was computed relative to the larger envelope frame it had while
-            // animating, so left alone it now sits offset toward one corner of the new, smaller
-            // frame instead of filling it, pushing the shape (and its outline) past the edge on
-            // whichever sides that offset points toward. Snapping it again, unanimated, at the
-            // final size recomputes the path for the frame it actually has now.
+            // The orange outline is card-only, and the backdrop reappears here already showing
+            // whichever final state (fill color set above, edge visibility, shape) this swing
+            // actually ended at.
+            self.silhouette.setEdgeVisible(expanded)
             self.silhouette.resize(
                 to: target, from: target, startGap: targetGap, targetGap: targetGap,
                 envelopeSize: restEnvelope, reduceMotion: true, completion: {}
             )
+            self.silhouette.alphaValue = 1
             completion()
         }
     }

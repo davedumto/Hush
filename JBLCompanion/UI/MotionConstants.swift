@@ -28,8 +28,6 @@ enum MotionConstants {
     static let pillTransitionScale: CGFloat = 0.5
     /// §9.1 point 2: the card itself starts/ends its own scale transition here.
     static let cardTransitionScale: CGFloat = 0.1
-    /// §9.1 point 2: "goes from blur 10 to blur 0."
-    static let cardTransitionBlurRadius: CGFloat = 10
 
     // MARK: - §9.1 point 6: content stagger
 
@@ -132,38 +130,3 @@ extension MotionConstants.CardTransitionKind {
     }
 }
 
-/// §9.1 point 2 / §9.2 point 2: "goes from blur 10 to blur 0" on the way in, and symmetrically
-/// blurs on the way out — `.modifier(active:identity:)` applies to both insertion and removal.
-private struct BlurTransitionModifier: ViewModifier {
-    let radius: CGFloat
-    func body(content: Content) -> some View { content.blur(radius: radius) }
-}
-
-extension AnyTransition {
-    static var cardBlurIn: AnyTransition {
-        .modifier(
-            active: BlurTransitionModifier(radius: MotionConstants.cardTransitionBlurRadius),
-            identity: BlurTransitionModifier(radius: 0)
-        )
-    }
-}
-
-/// §9.1 point 5 "Photo flight": the headphone photo in CollapsedPill and the hero photo in
-/// ExpandedCard share this one id/namespace so `matchedGeometryEffect` flies/grows the small photo
-/// into the big one, instead of one fading out while the other fades in separately. Shared here
-/// (not duplicated in both views) since both need the exact same id. A `nil` namespace — every
-/// preview/caller that isn't NotchView itself, and any call under Reduce Motion (§9.6: "No photo
-/// flight") — renders `content` unchanged, a plain crossfade between two independent images.
-struct PhotoFlight: ViewModifier {
-    static let id = "headphonesPhoto"
-    let namespace: Namespace.ID?
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if let namespace {
-            content.matchedGeometryEffect(id: Self.id, in: namespace)
-        } else {
-            content
-        }
-    }
-}
