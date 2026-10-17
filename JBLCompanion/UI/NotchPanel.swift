@@ -287,15 +287,22 @@ final class NotchPanel: NSPanel {
         guard newEdge != edge else { return }
         switch DockPlacement.edgeChangeOrdering(isExpanded: uiState.isExpanded) {
         case .collapseFirst:
+            // NotchUIState.isRepositioningEdge's own doc comment: this collapse/expand pair is
+            // triggered internally to relocate the card, not by the user tapping to actually
+            // close it, so the hero photo shouldn't fly to the pill for it — only the card
+            // shape's own scale+fade motion should play. `suppressPhotoFlight: true` on both
+            // calls below (not just the first) — `presentImmediately`'s own "move the pill" step
+            // in between unconditionally resets the flag, so the expand has to ask again, fresh.
+            //
             // Collapse (normally animated — this step doesn't relocate anything, so there's
             // nothing wrong with animating it) on the *old* edge, wait for that to actually
             // finish, only then move the pill (unanimated — this is the step that would
             // otherwise visibly cross the screen) and expand from the new edge.
-            collapse { [weak self] in
+            collapse(suppressPhotoFlight: true) { [weak self] in
                 guard let self else { return }
                 self.applyEdgeChange(newEdge)
                 self.presentImmediately(expanded: false)
-                self.expand()
+                self.expand(suppressPhotoFlight: true)
             }
         case .moveDirectly:
             applyEdgeChange(newEdge)
@@ -319,15 +326,15 @@ final class NotchPanel: NSPanel {
 
     // MARK: - Expand / collapse
 
-    private func expand(completion: @escaping () -> Void = {}) {
+    private func expand(suppressPhotoFlight: Bool = false, completion: @escaping () -> Void = {}) {
         guard !uiState.isExpanded else { completion(); return }
-        present(expanded: true, completion: completion)
+        present(expanded: true, suppressPhotoFlight: suppressPhotoFlight, completion: completion)
         installExpandedMonitors()
     }
 
-    private func collapse(completion: @escaping () -> Void = {}) {
+    private func collapse(suppressPhotoFlight: Bool = false, completion: @escaping () -> Void = {}) {
         guard uiState.isExpanded else { completion(); return }
-        present(expanded: false, completion: completion)
+        present(expanded: false, suppressPhotoFlight: suppressPhotoFlight, completion: completion)
         removeExpandedMonitors()
     }
 
@@ -605,11 +612,21 @@ final class NotchPanel: NSPanel {
 
     // MARK: - Present (envelope-then-settle resize)
 
-    private func present(expanded: Bool, completion: @escaping () -> Void = {}) {
+    /// `suppressPhotoFlight` sets `NotchUIState.isRepositioningEdge` for the duration of this one
+    /// swing (cleared again once it settles) — see that property's own doc comment for why an
+    /// edge-switch's internal collapse/expand asks for this and an ordinary one doesn't. Every
+    /// call sets it fresh, one way or the other, rather than only ever setting it true: that way
+    /// a plain (non-suppressing) present() arriving mid-swing — an unrelated collapse/expand that
+    /// supersedes this one — always leaves the flag correct for itself, the same reasoning
+    /// `presentImmediately` already applies to `isAnimating` below.
+    private func present(expanded: Bool, suppressPhotoFlight: Bool = false, completion: @escaping () -> Void = {}) {
         let target = expanded ? Self.expandedSize(for: edge, geometry: geometry) : Self.collapsedSize(for: edge, geometry: geometry)
         guard target != currentSize else {
             uiState.isExpanded = expanded
             uiState.isAnimating = false
+            // No actual swing happens in this branch, so there's nothing to suppress — and
+            // nowhere below to ever clear it again if it were set true here.
+            uiState.isRepositioningEdge = false
             completion()
             return
         }
@@ -691,8 +708,12 @@ final class NotchPanel: NSPanel {
         // Set synchronously, not inside the withAnimation block below: NotchView's pill-visibility
         // logic (`isPillVisible`) reads this directly, via a `.transaction { $0.animation = nil }`
         // that already strips any animation from that read regardless — it only has to be true
-        // before the swing's first frame renders, not animated itself.
+        // before the swing's first frame renders, not animated itself. Same reasoning for
+        // `isRepositioningEdge` just below it: NotchView's photoNamespace gating has to already
+        // be correct before ExpandedCard/CollapsedPill's first frame of this swing, not catch up
+        // to it mid-animation.
         uiState.isAnimating = true
+        uiState.isRepositioningEdge = suppressPhotoFlight
         let cardTransitionKind = expanded
             ? MotionConstants.expandTransitionKind(reduceMotion: reduceMotion)
             : MotionConstants.collapseTransitionKind(reduceMotion: reduceMotion)
@@ -701,6 +722,7 @@ final class NotchPanel: NSPanel {
         } completion: { [weak self] in
             guard let self, generation == self.presentGeneration else { return }
             self.uiState.isAnimating = false
+            self.uiState.isRepositioningEdge = false
             // Settle the window back down to the target size, plus the resting shadow margin
             // (restingEnvelopeSize) — not exactly the target, or CollapsedPill/ExpandedCard's own
             // shadows would have nowhere to bleed into and clip right back at the window edge.
@@ -734,6 +756,11 @@ final class NotchPanel: NSPanel {
         // animated swing with an edge change or a screen change could leave this stuck true
         // forever, hiding the pill even once correctly settled back at rest.
         uiState.isAnimating = false
+        // Same reasoning as `isAnimating` just above: nothing is swinging here, so nothing needs
+        // to stay suppressed. The one caller that *does* want suppression across this instant
+        // reposition (setDockEdge's "move the pill" step, between its collapse and its expand)
+        // re-asks for it on its own following `expand(suppressPhotoFlight: true)` call.
+        uiState.isRepositioningEdge = false
         silhouette.setFillColor(currentSilhouetteFillColor())
         let restEnvelope = Self.restingEnvelopeSize(for: target, edge: edge)
         setFrame(windowFrame(for: restEnvelope), display: true)

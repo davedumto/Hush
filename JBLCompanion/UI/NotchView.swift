@@ -68,6 +68,17 @@ final class NotchUIState {
     /// horizontal vs vertical docks) only once some other render happened to flush it through —
     /// the old layout's own background stayed visible underneath/behind the new one until then.
     var geometryVersion: Int = 0
+    /// True only for the duration of an edge switch's internal collapse-move-expand cycle
+    /// (NotchPanel.setDockEdge's `.collapseFirst` case, design/DESIGN_GUIDE.md §6: "collapse
+    /// first, move the pill, then expand from the new edge"). That rule is about the *card's*
+    /// own shape motion (and is still followed below, unaffected by this flag) — not the hero
+    /// photo's own fly-to-the-pill flight (§9.1 point 5), which owner feedback flagged as
+    /// reading like a glitch here: the photo starts trailing toward the pill, then the pill
+    /// instantly teleports to the new edge mid-flight, so the animation looks like it "catches
+    /// itself" and the photo drops out, rather than completing. That flight is correct for an
+    /// actual user-initiated collapse/expand; it's only this one, internally-triggered cycle
+    /// that should skip it and let the photo just fade with the rest of the card instead.
+    var isRepositioningEdge: Bool = false
 }
 
 /// Just the island's content — collapsed glyph+ring or the expanded card. The shape itself
@@ -210,8 +221,12 @@ struct NotchView: View {
     /// frame — a brief missing-image flash before it caught up. Keeping the pill's side of the id
     /// continuously live through the whole collapsed lifecycle, right up to the moment it's needed,
     /// avoids that cold start while still protecting the settled-expanded state.
+    ///
+    /// `isRepositioningEdge` overrides all of that to `nil`: see its own doc comment — an edge
+    /// switch's internal collapse/expand shouldn't fly the photo to the pill at all.
     private var pillPhotoNamespace: Namespace.ID? {
-        (!uiState.isExpanded || uiState.isAnimating) ? photoFlight : nil
+        guard !uiState.isRepositioningEdge else { return nil }
+        return (!uiState.isExpanded || uiState.isAnimating) ? photoFlight : nil
     }
 
     /// design/DESIGN_GUIDE.md §5 "Connecting": the classic link is up but no status event has
@@ -236,7 +251,13 @@ struct NotchView: View {
             state: state, dock: dockEdge().cardDock, onCollapseTapped: onCollapseTabTapped, isModeVerified: isModeVerified,
             supportsNoiseControl: supportsNoiseControl(), onSelectNoiseMode: onSelectNoiseMode,
             onReconnectTapped: onReconnectTapped, onOpenBluetoothSettingsTapped: onOpenBluetoothSettingsTapped,
-            lastMatchedProfileDisplayName: lastMatchedProfileDisplayName(), photoNamespace: photoFlight
+            lastMatchedProfileDisplayName: lastMatchedProfileDisplayName(), photoNamespace: cardPhotoNamespace
         )
+    }
+
+    /// See `isRepositioningEdge`'s own doc comment — the card's own half of the same suppression
+    /// `pillPhotoNamespace` applies to the pill's.
+    private var cardPhotoNamespace: Namespace.ID? {
+        uiState.isRepositioningEdge ? nil : photoFlight
     }
 }
