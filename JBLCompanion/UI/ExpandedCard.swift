@@ -24,7 +24,7 @@ struct ExpandedCard<ModeControls: View>: View {
     private var photoHeight: CGFloat { isVertical ? 168 : 206 }
     private var modelNumberFontSize: CGFloat { isVertical ? 112 : 150 }
     private var tabLengthAlongEdge: CGFloat { isVertical ? 92 : 116 }
-    private var tabDepthIntoPanel: CGFloat { isVertical ? 30 : 32 }
+    private var tabDepthIntoPanel: CGFloat { isVertical ? 22 : 24 }
 
     private var content: ExpandedCardContent {
         ExpandedCardContent.resolve(connection: state.connection, batteryPercent: state.batteryPercent)
@@ -134,13 +134,13 @@ struct ExpandedCard<ModeControls: View>: View {
     }
 
     private var tabContentPadding: EdgeInsets {
-        // Centers the mark (+wordmark) within the tab's own depth, roughly — the tab's depth is
-        // small (30-32pt) so a modest fixed inset reads correctly without per-dock measurement.
+        // Centers the mark (+wordmark) within the tab's own (shallow) depth — a modest fixed
+        // inset reads correctly without per-dock measurement.
         switch dock {
-        case .top: return EdgeInsets(top: 7, leading: 0, bottom: 0, trailing: 0)
-        case .bottom: return EdgeInsets(top: 0, leading: 0, bottom: 7, trailing: 0)
-        case .left: return EdgeInsets(top: 0, leading: 6, bottom: 0, trailing: 0)
-        case .right: return EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 6)
+        case .top: return EdgeInsets(top: 3, leading: 0, bottom: 0, trailing: 0)
+        case .bottom: return EdgeInsets(top: 0, leading: 0, bottom: 3, trailing: 0)
+        case .left: return EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 0)
+        case .right: return EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 4)
         }
     }
 
