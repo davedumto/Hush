@@ -86,17 +86,23 @@ final class NotchPanel: NSPanel {
 
     /// Extra transparent room reserved, at rest, around both the pill and the card so their own
     /// shadows/glows (CollapsedPill, ExpandedCard — both reach past their own bounds) aren't
-    /// clipped by the window's edge. The docked edge itself stays flush (nothing needs to render
-    /// past a flush edge); the margin only goes on the other three sides — see
-    /// `restingEnvelopeSize(for:edge:)`.
+    /// clipped by the window's edge. The expanded card's docked edge stays flush (nothing needs to
+    /// render past a flush, notch-fused edge); the margin only goes on the other three sides — see
+    /// `restingEnvelopeSize(for:edge:symmetric:)`. The collapsed pill is different: `symmetric`
+    /// there, margin on *all four* sides, including the docked one — see that parameter's own doc
+    /// comment on `layoutContent`.
     private static let shadowMargin: CGFloat = 40
 
-    /// Inflates `contentSize` for the resting envelope: double margin on the two sides
-    /// perpendicular to `edge` (symmetric, since the content is centered along the edge), single
-    /// margin on the far side along the docked axis (the near side is flush against the docked
-    /// edge, so it needs none).
-    private static func restingEnvelopeSize(for contentSize: CGSize, edge: DockEdge) -> CGSize {
-        edge.isVertical
+    /// Inflates `contentSize` for the resting envelope. `symmetric` (the collapsed pill's own
+    /// settled state): margin on all four sides, ignoring `edge` entirely. Otherwise (the expanded
+    /// card, always): double margin on the two sides perpendicular to `edge` (symmetric on that
+    /// axis, since the content is centered along the edge), single margin on the far side along
+    /// the docked axis (the near side is flush against the docked edge, so it needs none).
+    private static func restingEnvelopeSize(for contentSize: CGSize, edge: DockEdge, symmetric: Bool = false) -> CGSize {
+        guard !symmetric else {
+            return CGSize(width: contentSize.width + shadowMargin * 2, height: contentSize.height + shadowMargin * 2)
+        }
+        return edge.isVertical
             ? CGSize(width: contentSize.width + shadowMargin, height: contentSize.height + shadowMargin * 2)
             : CGSize(width: contentSize.width + shadowMargin * 2, height: contentSize.height + shadowMargin)
     }
@@ -190,7 +196,10 @@ final class NotchPanel: NSPanel {
         hosting.wantsLayer = true
         hosting.layer?.masksToBounds = false
 
-        let initialEnvelope = Self.restingEnvelopeSize(for: currentSize, edge: edge)
+        // NotchPanel always starts collapsed (currentSize above), so this initial envelope/layout
+        // is the collapsed pill's own settled state — symmetric: true throughout, same as every
+        // other settling call site (present()'s completion, presentImmediately()).
+        let initialEnvelope = Self.restingEnvelopeSize(for: currentSize, edge: edge, symmetric: true)
         let container = NSView(frame: NSRect(origin: .zero, size: initialEnvelope))
         container.wantsLayer = true
         container.layer?.masksToBounds = false
@@ -202,8 +211,8 @@ final class NotchPanel: NSPanel {
         silhouette.onDrag = { [weak self] delta in self?.handleDrag(delta) }
         silhouette.dockEdge = edge
 
-        layoutContent(for: currentSize, envelopeSize: initialEnvelope)
-        setFrame(windowFrame(for: initialEnvelope), display: false)
+        layoutContent(for: currentSize, envelopeSize: initialEnvelope, symmetric: true)
+        setFrame(windowFrame(for: initialEnvelope, symmetric: true), display: false)
         logger.info("NotchPanel created. frame=\(NSStringFromRect(self.frame), privacy: .public) edge=\(self.edge.rawValue, privacy: .public)")
         silhouette.setFillColor(currentSilhouetteFillColor())
         // Give the silhouette an initial path immediately — otherwise it stays empty (zero
@@ -212,7 +221,7 @@ final class NotchPanel: NSPanel {
         silhouette.resize(
             to: currentSize, from: currentSize,
             startGap: initialGap, targetGap: initialGap,
-            envelopeSize: initialEnvelope, reduceMotion: true, completion: {}
+            envelopeSize: initialEnvelope, symmetric: true, reduceMotion: true, completion: {}
         )
 
         syncScreenEdgeMonitors()
@@ -425,9 +434,12 @@ final class NotchPanel: NSPanel {
             offset + delta, collapsedSize: currentSize, expandedSize: expandedSize, edge: edge, visibleFrame: visibleFrame
         )
         // A live drag just follows the cursor — no envelope-then-settle animation, the same way
-        // dragging any ordinary window doesn't animate.
-        let envelope = Self.restingEnvelopeSize(for: currentSize, edge: edge)
-        setFrame(windowFrame(for: envelope), display: true)
+        // dragging any ordinary window doesn't animate. Dragging only ever happens while collapsed
+        // (the guard above) — symmetric: true, matching the envelope size content was last laid
+        // out against (the window's own size has to stay in lockstep with that, even though a drag
+        // only ever moves the window, never re-lays-out its content).
+        let envelope = Self.restingEnvelopeSize(for: currentSize, edge: edge, symmetric: true)
+        setFrame(windowFrame(for: envelope, symmetric: true), display: true)
         if let currentDisplayUUID { IslandSettings.setDockOffset(offset, forDisplayUUID: currentDisplayUUID, edge: edge) }
     }
 
@@ -438,7 +450,10 @@ final class NotchPanel: NSPanel {
     /// other three edges have no such gap to bridge.
     private var screenEdgeClickArea: CGRect? {
         guard edge == .top, let gap = geometry.floatingGap, gap > 0, !uiState.isExpanded, isVisible, !ignoresMouseEvents else { return nil }
-        let islandFrame = windowFrame(for: currentSize)
+        // Only ever reached while collapsed (the guard above) — symmetric: true, matching every
+        // other collapsed-state windowFrame(for:) call, so this strip starts from the real
+        // window's actual top edge, not where it would've been under the old flush positioning.
+        let islandFrame = windowFrame(for: currentSize, symmetric: true)
         return CGRect(x: islandFrame.minX, y: islandFrame.maxY, width: islandFrame.width, height: gap + 2)
     }
 
@@ -620,14 +635,24 @@ final class NotchPanel: NSPanel {
     /// `.top` keeps IslandGeometry.frame(for:)'s own anchor math (notch fusion / menu-bar drop),
     /// shifted by the current drag offset, which that method knows nothing about on its own; the
     /// other three edges go through DockPlacement entirely.
-    private func windowFrame(for size: CGSize) -> CGRect {
+    ///
+    /// `symmetric` (the collapsed pill's own settled state — see `layoutContent`'s own doc
+    /// comment): `size` is now bigger on the docked side too (shadowMargin, not flush), so without
+    /// compensating here, the pill's own *visual* distance from the screen edge would become
+    /// `IslandSettings.edgeMargin(for:) + shadowMargin` instead of just what that setting actually
+    /// says. Shifts the window itself to cancel that out exactly, so the setting stays accurate —
+    /// the extra room is still there for hover-scale/shadow to bleed into, it's just invisible
+    /// window backing-store space the content is centered away from, not a visible gap.
+    private func windowFrame(for size: CGSize, symmetric: Bool = false) -> CGRect {
         switch edge {
         case .top:
             var frame = geometry.frame(for: size)
+            if symmetric { frame.origin.y += Self.shadowMargin }
             frame.origin.x += offset
             return frame
         case .bottom, .left, .right:
-            return DockPlacement.frame(for: size, edge: edge, offset: offset, visibleFrame: visibleFrame, margin: IslandSettings.edgeMargin(for: edge))
+            let margin = symmetric ? IslandSettings.edgeMargin(for: edge) - Self.shadowMargin : IslandSettings.edgeMargin(for: edge)
+            return DockPlacement.frame(for: size, edge: edge, offset: offset, visibleFrame: visibleFrame, margin: margin)
         }
     }
 
@@ -747,14 +772,16 @@ final class NotchPanel: NSPanel {
             // This is also where the hosting content frame (kept at the larger
             // `contentLayoutSize` above for the whole visible swing) finally shrinks down to the
             // true small target on a collapse — the "shrink after animating" half of the same rule.
-            let restEnvelope = Self.restingEnvelopeSize(for: target, edge: self.edge)
-            self.setFrame(self.windowFrame(for: restEnvelope), display: true)
-            self.layoutContent(for: target, envelopeSize: restEnvelope)
+            // symmetric: !expanded — only the pill's own settled state gets margin on its docked
+            // side too (layoutContent's own doc comment); the settled card stays flush, unchanged.
+            let restEnvelope = Self.restingEnvelopeSize(for: target, edge: self.edge, symmetric: !expanded)
+            self.setFrame(self.windowFrame(for: restEnvelope, symmetric: !expanded), display: true)
+            self.layoutContent(for: target, envelopeSize: restEnvelope, symmetric: !expanded)
             // The backdrop reappears here already showing whichever final state (fill color set
             // above, shape) this swing actually ended at.
             self.silhouette.resize(
                 to: target, from: target, startGap: targetGap, targetGap: targetGap,
-                envelopeSize: restEnvelope, reduceMotion: true, completion: {}
+                envelopeSize: restEnvelope, symmetric: !expanded, reduceMotion: true, completion: {}
             )
             self.silhouette.alphaValue = 1
             completion()
@@ -780,15 +807,29 @@ final class NotchPanel: NSPanel {
         // re-asks for it on its own following `expand(suppressPhotoFlight: true)` call.
         uiState.isRepositioningEdge = false
         silhouette.setFillColor(currentSilhouetteFillColor())
-        let restEnvelope = Self.restingEnvelopeSize(for: target, edge: edge)
-        setFrame(windowFrame(for: restEnvelope), display: true)
-        layoutContent(for: target, envelopeSize: restEnvelope)
+        // symmetric: !expanded — see layoutContent's own doc comment.
+        let restEnvelope = Self.restingEnvelopeSize(for: target, edge: edge, symmetric: !expanded)
+        setFrame(windowFrame(for: restEnvelope, symmetric: !expanded), display: true)
+        layoutContent(for: target, envelopeSize: restEnvelope, symmetric: !expanded)
         let gap = expanded ? nil : Self.collapsedGap(edge: edge, geometry: geometry)
-        silhouette.resize(to: target, from: target, startGap: gap, targetGap: gap, envelopeSize: restEnvelope, reduceMotion: true, completion: {})
+        silhouette.resize(
+            to: target, from: target, startGap: gap, targetGap: gap,
+            envelopeSize: restEnvelope, symmetric: !expanded, reduceMotion: true, completion: {}
+        )
     }
 
     /// Centers the silhouette and the SwiftUI content within the (always at-least-as-large-as-
     /// target, thanks to restingEnvelopeSize's shadow margin even at rest) envelope window.
+    ///
+    /// `symmetric`: the collapsed pill's own settled state only, never the expanded card and
+    /// never mid-swing (the mid-swing window stays card-sized the whole time regardless of
+    /// direction — "grow first/shrink last" — so there's nothing pill-shaped to symmetrize until
+    /// the swing actually finishes). Flush-against-the-edge, by design, left the pill with zero
+    /// envelope room on the near/docked side for its own hover-scale growth
+    /// (MotionConstants.pillHoverScale) and shadow/glow to bleed into — clipped flat against the
+    /// window's own hard edge on hover, a "chip" on whichever side faces the docked edge. Passed
+    /// through to `silhouette.resize(...)`'s own `symmetric` too, so the native backdrop centers
+    /// the same way and stays aligned with this SwiftUI content.
     ///
     /// `silhouette.resize(...)` also sets its own frame to `envelopeSize` while it's actively
     /// animating, but nothing resets it once the animation finishes and the window shrinks back
@@ -796,17 +837,21 @@ final class NotchPanel: NSPanel {
     /// envelope while its parent container shrunk around it, so the shape's internal path
     /// positioning (computed relative to that envelope) ended up off-center in the real window,
     /// clipping its outline unevenly on one side.
-    private func layoutContent(for size: CGSize, envelopeSize: CGSize) {
+    private func layoutContent(for size: CGSize, envelopeSize: CGSize, symmetric: Bool = false) {
         guard let container = contentView else { return }
         container.frame = NSRect(origin: .zero, size: envelopeSize)
         silhouette.frame = NSRect(origin: .zero, size: envelopeSize)
-        hosting.frame = CGRect(origin: contentOrigin(for: size, envelopeSize: envelopeSize), size: size)
+        hosting.frame = CGRect(origin: contentOrigin(for: size, envelopeSize: envelopeSize, symmetric: symmetric), size: size)
     }
 
-    /// Where `size` sits within `envelopeSize`: flush against the docked edge's own side (nothing
-    /// needs to render past a flush edge), centered on the perpendicular axis. Mirrors
-    /// `restingEnvelopeSize(for:edge:)`'s own margin placement.
-    private func contentOrigin(for size: CGSize, envelopeSize: CGSize) -> CGPoint {
+    /// Where `size` sits within `envelopeSize`. `symmetric`: centered on both axes (see
+    /// `layoutContent`'s own doc comment). Otherwise: flush against the docked edge's own side
+    /// (nothing needs to render past a flush edge), centered on the perpendicular axis. Mirrors
+    /// `restingEnvelopeSize(for:edge:symmetric:)`'s own margin placement.
+    private func contentOrigin(for size: CGSize, envelopeSize: CGSize, symmetric: Bool = false) -> CGPoint {
+        guard !symmetric else {
+            return CGPoint(x: (envelopeSize.width - size.width) / 2, y: (envelopeSize.height - size.height) / 2)
+        }
         switch edge {
         case .top:
             return CGPoint(x: (envelopeSize.width - size.width) / 2, y: envelopeSize.height - size.height)

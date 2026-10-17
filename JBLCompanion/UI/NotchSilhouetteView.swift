@@ -129,7 +129,7 @@ final class NotchSilhouetteView: NSView {
     /// unanimated, under Reduce Motion).
     func resize(
         to target: CGSize, from start: CGSize, startGap: CGFloat?, targetGap: CGFloat?,
-        envelopeSize: CGSize, reduceMotion: Bool, completion: @escaping () -> Void
+        envelopeSize: CGSize, symmetric: Bool = false, reduceMotion: Bool, completion: @escaping () -> Void
     ) {
         animationGeneration += 1
         let generation = animationGeneration
@@ -144,7 +144,16 @@ final class NotchSilhouetteView: NSView {
         // unconditionally; that was fine when `.top` was the only reachable dock, but left the
         // shape itself (and its hit-testing) pinned to the top of the window on every other edge
         // even after the SwiftUI content moved to the real docked edge.
+        //
+        // `symmetric` (the collapsed pill's own settled state only — see NotchPanel.layoutContent's
+        // own doc comment) centers on *both* axes instead: flush-against-the-edge, by design, left
+        // the pill with zero envelope room on the near/docked side for its own hover-scale growth
+        // (MotionConstants.pillHoverScale) and shadow/glow to bleed into, clipping flat against the
+        // window's own hard edge on hover — a "chip" on whichever side faces the docked edge.
         func origin(for size: CGSize) -> CGPoint {
+            guard !symmetric else {
+                return CGPoint(x: (envelopeSize.width - size.width) / 2, y: (envelopeSize.height - size.height) / 2)
+            }
             switch dockEdge {
             case .top:
                 return CGPoint(x: (envelopeSize.width - size.width) / 2, y: envelopeSize.height - size.height)
