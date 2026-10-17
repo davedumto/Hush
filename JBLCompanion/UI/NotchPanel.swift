@@ -572,11 +572,7 @@ final class NotchPanel: NSPanel {
         )
         return IslandGeometry(
             screen: screen.frame, safeAreaTop: screen.safeAreaInsets.top, cameraWidth: cameraWidth,
-            layout: IslandSettings.size, menuBarHeight: menuBarHeight,
-            customWidth: IslandSettings.customWidth, customHeight: IslandSettings.customHeight,
-            cameraFit: IslandSettings.cameraFit, silhouette: IslandSettings.silhouette,
-            capsuleFit: IslandSettings.capsuleFit, hideMenuBarGap: IslandSettings.hideMenuBarGap,
-            outline: IslandSettings.outlineEnabled
+            menuBarHeight: menuBarHeight, silhouette: IslandSettings.silhouette, capsuleFit: IslandSettings.capsuleFit
         )
     }
 

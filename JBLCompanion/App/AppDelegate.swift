@@ -214,10 +214,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    var isCurrentDisplayNotched: Bool {
-        panel?.isNotched ?? false
-    }
-
     var currentDockEdge: DockEdge {
         panel?.currentEdge ?? .top
     }
