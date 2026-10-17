@@ -33,8 +33,15 @@ struct CutoutTabShape: Shape {
             return CGAffineTransform(scaleX: 1, y: -1)
                 .concatenating(CGAffineTransform(translationX: rect.midX, y: rect.maxY))
         case .left:
-            // Rotate so "along edge" runs vertically and "depth" runs rightward from the left edge.
-            return CGAffineTransform(rotationAngle: .pi / 2)
+            // Rotate so "along edge" runs vertically and "depth" runs rightward (inward) from the
+            // left edge. +π/2 was the wrong direction: canonical local (x, y) with y = depth
+            // rotates to (-y, x) at +π/2, so a depth of +18 (the straight-into-the-panel
+            // direction) lands at x' = -18 — 18pt to the *left* of rect.minX, outside the card
+            // entirely, not inside it. -π/2 rotates (x, y) to (y, -x), putting that same depth
+            // point at x' = +18 — correctly 18pt inside the card from the left edge. (-y, x) vs.
+            // (y, -x) looks like a one-sign difference on paper, but it's the entire tab's
+            // visibility: outside the card's own bounds (invisible) vs. inside it (correct).
+            return CGAffineTransform(rotationAngle: -.pi / 2)
                 .concatenating(CGAffineTransform(translationX: rect.minX, y: rect.midY))
         case .right:
             return CGAffineTransform(rotationAngle: -.pi / 2)
