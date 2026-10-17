@@ -6,10 +6,13 @@ import os.log
 /// one app was a real bug, not a deliberate fallback/primary split: MenuBarExtra used to also
 /// create its own, with a richer dropdown (device/battery, noise-mode buttons, an Island Settings
 /// button, a notch-circle toggle). That functionality's two genuinely non-duplicated pieces moved
-/// elsewhere rather than being lost: Island Settings is now opened from the gear icon in
-/// ExpandedCard's own top row (ExpandedCard.openIslandSettings), and the fallback menu already had
-/// its own equivalent "Show Notch" action. The rest (mode buttons, battery, device name) was a
-/// duplicate of what the expanded card itself already shows.
+/// elsewhere rather than being lost: Island Settings is reachable both from the gear icon in
+/// ExpandedCard's own top row (ExpandedCard.openIslandSettings) and from the fallback menu's own
+/// "Island Settings…" item (AppDelegate.openIslandSettingsFromFallback, which goes through
+/// NotchPanel.requestOpenIslandSettings — see that property's own doc comment for why AppDelegate
+/// can't just call `openWindow` itself), and the fallback menu already had its own equivalent
+/// "Show Hush" action. The rest (mode buttons, battery, device name) was a duplicate of what the
+/// expanded card itself already shows.
 @main
 struct JBLCompanionApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -17,7 +20,8 @@ struct JBLCompanionApp: App {
     var body: some Scene {
         // A real window, not part of any menu — see IslandSettingsView's own doc comment for why
         // the steppers it hosts need to live outside a dropdown. Opened via
-        // ExpandedCard.openIslandSettings, the gear icon in the card's own top row.
+        // ExpandedCard.openIslandSettings (the gear icon in the card's own top row) or the
+        // fallback menu's "Island Settings…" item.
         Window("Island Settings", id: IslandSettingsView.windowID) {
             IslandSettingsView(appDelegate: appDelegate)
         }

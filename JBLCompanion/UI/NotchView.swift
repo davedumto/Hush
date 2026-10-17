@@ -79,6 +79,15 @@ final class NotchUIState {
     /// actual user-initiated collapse/expand; it's only this one, internally-triggered cycle
     /// that should skip it and let the photo just fade with the rest of the card instead.
     var isRepositioningEdge: Bool = false
+    /// Bumped by NotchPanel.requestOpenIslandSettings() — the fallback NSStatusItem menu's own
+    /// "Island Settings…" item. AppDelegate (plain AppKit) has no SwiftUI environment of its own
+    /// to call `openWindow` from directly, so it goes through this instead: NotchView is the one
+    /// always-mounted SwiftUI view in the whole app (see the body's own doc comment on why the
+    /// pill never leaves the tree), so it's the one place that can actually hold an
+    /// `@Environment(\.openWindow)` and act on a change here. A counter, not a Bool, so requesting
+    /// it twice in a row (the window already open, re-clicking the menu item) still fires the
+    /// `.onChange` both times instead of only the first.
+    var islandSettingsRequestToken: Int = 0
 }
 
 /// Just the island's content — collapsed glyph+ring or the expanded card. The shape itself
@@ -126,6 +135,9 @@ struct NotchView: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// NotchUIState.islandSettingsRequestToken's own doc comment — this is the one place in the
+    /// app that can actually call it.
+    @Environment(\.openWindow) private var openWindow
     /// design/DESIGN_GUIDE.md §9.1 point 5 "Photo flight": owned by this common ancestor and
     /// threaded into both CollapsedPill and ExpandedCard, so `matchedGeometryEffect` can morph the
     /// pill's own photo into the hero photo across the expand/collapse transition below.
@@ -169,6 +181,11 @@ struct NotchView: View {
         // the whole swing — see NotchPanel.present()'s own doc comment on `contentLayoutSize`).
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.clear)
+        .onChange(of: uiState.islandSettingsRequestToken) { _, newValue in
+            guard newValue > 0 else { return }
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            openWindow(id: IslandSettingsView.windowID)
+        }
     }
 
     /// On expand, hide immediately — `isExpanded` flipping to true is reason enough on its own.

@@ -43,11 +43,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var activeSession: ActiveDeviceSession?
     private var panel: NotchPanel?
     private var fallbackStatusItem: NSStatusItem?
+    /// Checkmark state refreshed in menuWillOpen(_:) — stored rather than looked up by title
+    /// (NSMenu.item(withTitle:)), which would silently break again the next time this item's
+    /// title text changes.
+    private var showHushMenuItem: NSMenuItem?
     #if DEBUG
-    /// Rebuilt fresh in menuWillOpen(_:) each time the fallback menu opens, from
-    /// debugTestableModes — tracked so the previous batch can be removed first rather than
-    /// accumulating duplicates as the active profile (and so its verified modes) changes.
-    private var debugTestFrameMenuItems: [NSMenuItem] = []
+    /// Its submenu is rebuilt fresh in menuWillOpen(_:) each time the fallback menu opens, from
+    /// debugTestableModes — the item itself is created once and just hidden when there's nothing
+    /// to test, rather than inserting/removing it from the main menu's own item list.
+    private var debugMenuItem: NSMenuItem?
     #endif
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -115,11 +119,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.delegate = self
 
-        let showNotchItem = NSMenuItem(title: "Show Notch", action: #selector(toggleShowNotchFromFallback), keyEquivalent: "")
-        showNotchItem.target = self
-        menu.addItem(showNotchItem)
+        let islandSettingsItem = NSMenuItem(title: "Island Settings…", action: #selector(openIslandSettingsFromFallback), keyEquivalent: "")
+        islandSettingsItem.target = self
+        menu.addItem(islandSettingsItem)
 
-        let resetPositionItem = NSMenuItem(title: "Reset Position", action: #selector(resetPositionFromFallback), keyEquivalent: "")
+        menu.addItem(.separator())
+
+        let showHushItem = NSMenuItem(title: "Show Hush", action: #selector(toggleShowHushFromFallback), keyEquivalent: "")
+        showHushItem.target = self
+        menu.addItem(showHushItem)
+        showHushMenuItem = showHushItem
+
+        let resetPositionItem = NSMenuItem(title: "Reset Position & Display", action: #selector(resetPositionFromFallback), keyEquivalent: "")
         resetPositionItem.target = self
         menu.addItem(resetPositionItem)
 
@@ -128,6 +139,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let copyDiagnosticsItem = NSMenuItem(title: "Copy Diagnostics", action: #selector(copyDiagnosticsFromFallback), keyEquivalent: "")
         copyDiagnosticsItem.target = self
         menu.addItem(copyDiagnosticsItem)
+
+        #if DEBUG
+        // Created once, hidden/shown and its submenu rebuilt in menuWillOpen(_:) — never
+        // inserted/removed from the main menu's own item list (see `debugMenuItem`'s own doc
+        // comment).
+        menu.addItem(.separator())
+        let debugItem = NSMenuItem(title: "Debug", action: nil, keyEquivalent: "")
+        debugItem.submenu = NSMenu()
+        menu.addItem(debugItem)
+        debugMenuItem = debugItem
+        #endif
 
         menu.addItem(.separator())
 
@@ -176,7 +198,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func toggleShowNotchFromFallback() {
+    @objc private func openIslandSettingsFromFallback() {
+        panel?.requestOpenIslandSettings()
+    }
+
+    @objc private func toggleShowHushFromFallback() {
         let current = UserDefaults.standard.object(forKey: "showNotchCircle") as? Bool ?? true
         let newValue = !current
         UserDefaults.standard.set(newValue, forKey: "showNotchCircle")
@@ -410,34 +436,28 @@ extension AppDelegate: BLEBatteryLinkDelegate {
 }
 
 extension AppDelegate: NSMenuDelegate {
-    /// Refreshes the fallback menu's "Show Notch" checkmark, and (DEBUG only) rebuilds the "Send
-    /// test frame…" items from whichever modes the currently active profile has verified, right
-    /// before the menu opens — simpler than trying to keep either in sync after every change
-    /// elsewhere (a profile match, a toggle from some other surface).
+    /// Refreshes the fallback menu's "Show Hush" checkmark, and (DEBUG only) rebuilds the "Debug"
+    /// submenu's "Send test frame…" items from whichever modes the currently active profile has
+    /// verified, right before the menu opens — simpler than trying to keep either in sync after
+    /// every change elsewhere (a profile match, a toggle from some other surface).
     func menuWillOpen(_ menu: NSMenu) {
         guard menu === fallbackStatusItem?.menu else { return }
         let showing = UserDefaults.standard.object(forKey: "showNotchCircle") as? Bool ?? true
-        menu.item(withTitle: "Show Notch")?.state = showing ? .on : .off
+        showHushMenuItem?.state = showing ? .on : .off
         #if DEBUG
-        rebuildDebugTestFrameMenuItems(in: menu)
+        rebuildDebugTestFrameSubmenu()
         #endif
     }
 
     #if DEBUG
-    /// Inserted right before "Quit" — removes whatever this added last time first, so switching
-    /// profiles (or losing the connection entirely) never leaves a stale mode's item behind.
-    private func rebuildDebugTestFrameMenuItems(in menu: NSMenu) {
-        for item in debugTestFrameMenuItems { menu.removeItem(item) }
-        debugTestFrameMenuItems = []
-        guard !debugTestableModes.isEmpty, let quitIndex = menu.items.firstIndex(where: { $0.action == #selector(quitFromFallback) })
-        else { return }
-
-        var insertAt = quitIndex
-        let separator = NSMenuItem.separator()
-        menu.insertItem(separator, at: insertAt)
-        debugTestFrameMenuItems.append(separator)
-        insertAt += 1
-
+    /// `debugMenuItem` and its submenu are created once in setupFallbackStatusItem() and never
+    /// touch the main menu's own item list again — only hidden when there's nothing to test, and
+    /// its submenu's contents replaced, so switching profiles (or losing the connection entirely)
+    /// never leaves a stale mode's item behind.
+    private func rebuildDebugTestFrameSubmenu() {
+        guard let submenu = debugMenuItem?.submenu else { return }
+        debugMenuItem?.isHidden = debugTestableModes.isEmpty
+        submenu.removeAllItems()
         for mode in debugTestableModes {
             let item = NSMenuItem(
                 title: "Send test frame: \(mode.displayText)", action: #selector(sendDebugTestFrameFromFallback(_:)), keyEquivalent: ""
@@ -445,9 +465,7 @@ extension AppDelegate: NSMenuDelegate {
             item.target = self
             item.representedObject = mode
             item.isEnabled = headphoneState.pendingNoiseMode == nil
-            menu.insertItem(item, at: insertAt)
-            debugTestFrameMenuItems.append(item)
-            insertAt += 1
+            submenu.addItem(item)
         }
     }
 

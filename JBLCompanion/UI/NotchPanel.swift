@@ -275,6 +275,13 @@ final class NotchPanel: NSPanel {
     var isNotched: Bool { edge == .top && geometry.isNotched }
     var currentEdge: DockEdge { edge }
 
+    /// The fallback NSStatusItem menu's own "Island Settings…" item — see
+    /// NotchUIState.islandSettingsRequestToken's own doc comment for why it has to go through
+    /// NotchView instead of opening the window directly from here.
+    func requestOpenIslandSettings() {
+        uiState.islandSettingsRequestToken += 1
+    }
+
     func settingsDidChange() {
         // Forced, not a plain reposition(): a margin change on bottom/left/right isn't visible to
         // reposition()'s own "did anything actually change" guard at all — IslandSettings.edgeMargin
