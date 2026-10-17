@@ -81,8 +81,11 @@ struct CollapsedPill: View {
             )
         // Base resting shadow (§3): y10 blur24 spread-8, approximated — SwiftUI's .shadow has no
         // spread term, so "spread" is folded into radius/opacity rather than modeled exactly.
+        // Dark theme only, on owner request: against a dark desktop background the shadow just
+        // read as an unwanted dark smudge around the pill; light theme's own reference (a soft
+        // shadow under a white circle, same as any normal floating card) keeps it.
         .shadow(
-            color: (variant.theme == .dark ? Color.black : Theme.Brand.deepNavy).opacity(variant.theme == .dark ? 0.7 : 0.4),
+            color: variant.theme == .dark ? .clear : Theme.Brand.deepNavy.opacity(0.4),
             radius: 12, x: 0, y: 10
         )
         // Notch glow (§3): y12 blur26 spread-10, BrandOrange 60% — always present under the notch,
