@@ -205,7 +205,6 @@ final class NotchPanel: NSPanel {
         setFrame(windowFrame(for: initialEnvelope), display: false)
         logger.info("NotchPanel created. frame=\(NSStringFromRect(self.frame), privacy: .public) edge=\(self.edge.rawValue, privacy: .public)")
         silhouette.setFillColor(currentSilhouetteFillColor())
-        silhouette.setEdgeVisible(false) // starts collapsed — no orange outline until expanded.
         // Give the silhouette an initial path immediately — otherwise it stays empty (zero
         // frame) until the first expand/collapse transition ever runs. Only .top ever floats as
         // a capsule with a gap; the other three edges are always flush-docked pills.
@@ -711,10 +710,8 @@ final class NotchPanel: NSPanel {
             let restEnvelope = Self.restingEnvelopeSize(for: target, edge: self.edge)
             self.setFrame(self.windowFrame(for: restEnvelope), display: true)
             self.layoutContent(for: target, envelopeSize: restEnvelope)
-            // The orange outline is card-only, and the backdrop reappears here already showing
-            // whichever final state (fill color set above, edge visibility, shape) this swing
-            // actually ended at.
-            self.silhouette.setEdgeVisible(expanded)
+            // The backdrop reappears here already showing whichever final state (fill color set
+            // above, shape) this swing actually ended at.
             self.silhouette.resize(
                 to: target, from: target, startGap: targetGap, targetGap: targetGap,
                 envelopeSize: restEnvelope, reduceMotion: true, completion: {}
@@ -738,7 +735,6 @@ final class NotchPanel: NSPanel {
         // forever, hiding the pill even once correctly settled back at rest.
         uiState.isAnimating = false
         silhouette.setFillColor(currentSilhouetteFillColor())
-        silhouette.setEdgeVisible(expanded)
         let restEnvelope = Self.restingEnvelopeSize(for: target, edge: edge)
         setFrame(windowFrame(for: restEnvelope), display: true)
         layoutContent(for: target, envelopeSize: restEnvelope)

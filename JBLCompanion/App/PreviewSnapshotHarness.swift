@@ -108,6 +108,7 @@ enum PreviewSnapshotHarness {
             Scenario(name: "card-06-top-770-light-ambient-pending", colorScheme: .light, content: card(pending, .top)),
             Scenario(name: "card-09-top-770-dark-timed-out-kept-mode", colorScheme: .dark, content: card(timedOut, .top)),
             Scenario(name: "card-unverified-eventmap-dark", colorScheme: .dark, content: card(unverifiedEventMap, .top)),
+            Scenario(name: "card-08-unverified-eventmap-light", colorScheme: .light, content: card(unverifiedEventMap, .top)),
             Scenario(name: "card-32-bottom-770-dark", colorScheme: .dark, content: card(s770, .bottom)),
             Scenario(name: "card-bottom-770-light", colorScheme: .light, content: card(s770, .bottom)),
             Scenario(name: "card-31-left-770-dark", colorScheme: .dark, content: card(s770, .left)),

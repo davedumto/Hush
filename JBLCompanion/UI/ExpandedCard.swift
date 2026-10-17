@@ -37,6 +37,7 @@ struct ExpandedCard: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.openWindow) private var openWindow
 
     private var isVertical: Bool { dock.isVertical }
     // design/DESIGN_GUIDE.md §4: "Height follows content, about 470" — not exactly 470. Summing
@@ -102,19 +103,16 @@ struct ExpandedCard: View {
     // MARK: - Frame + panel
 
     private var frame: some View {
+        // design/DESIGN_GUIDE.md §4 "Frame and panel": CardFrame fill, corner radius 33, a shadow
+        // in light theme only — no border/stroke at all. An earlier "brand-accent edge" overlay
+        // here (and the native silhouette's matching edgeLayer underneath it) put a permanent
+        // orange outline around the whole card that neither the guide nor any reference image
+        // (01, 02, 05, 09, ...) actually shows — found comparing against them directly, removed.
         RoundedRectangle(cornerRadius: 33, style: .continuous)
             .fill(Theme.Semantic.cardFrame)
             .shadow(
                 color: colorScheme == .dark ? .clear : Theme.Brand.black.opacity(0.6),
                 radius: 30, x: 0, y: 30
-            )
-            // The brand-accent edge: drawn here, not left to NotchSilhouetteView's own native
-            // edgeLayer (which strokes the identical path underneath) — this card frame is fully
-            // opaque and sits on top of it in z-order, so the native stroke stays mostly hidden
-            // once real content is showing. Drawing it again here keeps it visible while open.
-            .overlay(
-                RoundedRectangle(cornerRadius: 33, style: .continuous)
-                    .strokeBorder(Theme.Brand.orange.opacity(0.9), lineWidth: 1.5)
             )
     }
 
@@ -247,9 +245,18 @@ struct ExpandedCard: View {
         HStack(spacing: 8) {
             topRowChip
             Spacer(minLength: 0)
-            iconButton("IconSettings")
+            iconButton("IconSettings", onTap: openIslandSettings)
             iconButton("IconPower")
         }
+    }
+
+    /// This app is an accessory (LSUIElement) with no Dock icon — without activating first, a
+    /// newly opened window can appear behind whatever app was frontmost. Same two-step sequence
+    /// as IslandSettingsMenuButton, this card's own former route to the same window before that
+    /// menu bar item was consolidated away — now this gear icon is the only route left.
+    private func openIslandSettings() {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        openWindow(id: IslandSettingsView.windowID)
     }
 
     /// §5: the top-left chip itself swaps content for "No device" and "Connecting" — otherwise
@@ -296,7 +303,7 @@ struct ExpandedCard: View {
             .background(Theme.Semantic.chipFill, in: Capsule())
     }
 
-    private func iconButton(_ assetName: String) -> some View {
+    private func iconButton(_ assetName: String, onTap: (() -> Void)? = nil) -> some View {
         Circle()
             .strokeBorder(Theme.Semantic.glassStroke, lineWidth: 1)
             .frame(width: 28, height: 28)
@@ -308,6 +315,9 @@ struct ExpandedCard: View {
                     .frame(width: 14, height: 14)
                     .foregroundStyle(.white)
             )
+            // nil (IconPower, for now) stays purely decorative, same as both always were before.
+            .contentShape(Circle())
+            .onTapGesture { onTap?() }
     }
 
     // MARK: - Hero
@@ -409,10 +419,12 @@ struct ExpandedCard: View {
                 // Motion (§9.6: "No photo flight"), where the two photos just crossfade in place.
                 .modifier(PhotoFlight(namespace: reduceMotion ? nil : photoNamespace))
         } else if isNoDevice {
-            // §5 "No headphones": "HushMark at 118 (side docks 92), arch white 32%, dot dimmed".
+            // §5 "No headphones": "HushMark at 118 (side docks 92), arch white 32%, dot dimmed" —
+            // reference 20/28 reads the dot about as faint as the arch itself, not half-strength;
+            // 0.5 still looked like a clearly lit, solid-orange dot next to it.
             markGlyph(
                 size: 118, color: colorScheme == .dark ? .white.opacity(0.32) : Theme.Brand.navy.opacity(0.32),
-                dotOpacity: 0.5
+                dotOpacity: 0.32
             )
             .frame(height: photoHeight)
         } else {
@@ -498,10 +510,12 @@ struct ExpandedCard: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 15, style: .continuous)
-                // Light theme specifically: an orange edge separates the chip from the hero number
-                // sitting behind/near it, which is also light/white there (same "white-on-white"
-                // issue the number's own drop shadow addresses for the photo).
-                .strokeBorder(isLow || colorScheme == .light ? Theme.Brand.orange : Theme.Semantic.glassStroke, lineWidth: 1)
+                // Orange only for low battery, in both themes — design/DESIGN_GUIDE.md §8's own
+                // light-mode reference (02, 06, ...) shows a plain glass border on a normal-battery
+                // chip in light theme too; an earlier "always orange in light theme" special case
+                // here (for a white-on-white contrast concern that reference never actually shows)
+                // didn't match it.
+                .strokeBorder(isLow ? Theme.Brand.orange : Theme.Semantic.glassStroke, lineWidth: 1)
         )
         // §9.5 "Battery crossing 15%": "Chip color crossfades to orange over 250 ms, then the
         // pulse starts" — the fill/border/ink swaps above are already driven by `isLow`, so a

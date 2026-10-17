@@ -65,8 +65,12 @@ struct ConnectingPulsingDot: View {
     @State private var isBright = false
 
     var body: some View {
+        // design/DESIGN_GUIDE.md §5 "Connecting": "pulsing ring dot" — no BrandOrange qualifier,
+        // unlike every other colored dot the guide names explicitly (No headphones' "grey dot",
+        // Low battery's "solid orange"). The reference images (19, 27) confirm it: a plain grey
+        // ring, not orange — an orange one here was a mismatch found comparing against them.
         Circle()
-            .strokeBorder(Theme.Brand.orange, lineWidth: 1.7)
+            .strokeBorder(Color.white.opacity(0.5), lineWidth: 1.7)
             .frame(width: 7, height: 7)
             .opacity(reduceMotion ? 1 : (isBright ? 1 : 0.3))
             .onAppear {

@@ -112,19 +112,3 @@ struct IslandSettingsView: View {
         .onChange(of: chosenDisplayUUID) { _, _ in appDelegate.notchSettingsDidChange() }
     }
 }
-
-/// The dropdown's entry point into the Island Settings window. A separate small view purely so it
-/// can read `openWindow` from the environment — the MenuBarExtra content closure lives inside
-/// `JBLCompanionApp`, a Scene builder, which can't hold `@Environment` directly.
-struct IslandSettingsMenuButton: View {
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        Button("Island Settings…") {
-            // This is an accessory (LSUIElement) app with no Dock icon — without activating
-            // first, a newly opened window can appear behind whatever app was frontmost.
-            NSApplication.shared.activate(ignoringOtherApps: true)
-            openWindow(id: IslandSettingsView.windowID)
-        }
-    }
-}

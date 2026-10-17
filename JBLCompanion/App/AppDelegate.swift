@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import os.log
 
 /// Bundles the per-connection objects (write guard, BLE battery link, RFCOMM RACE link, noise
@@ -42,6 +43,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var activeSession: ActiveDeviceSession?
     private var panel: NotchPanel?
     private var fallbackStatusItem: NSStatusItem?
+    #if DEBUG
+    /// Rebuilt fresh in menuWillOpen(_:) each time the fallback menu opens, from
+    /// debugTestableModes — tracked so the previous batch can be removed first rather than
+    /// accumulating duplicates as the active profile (and so its verified modes) changes.
+    private var debugTestFrameMenuItems: [NSMenuItem] = []
+    #endif
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // The unit test target hosts this app (required for @testable import to resolve symbols
@@ -62,10 +69,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         verifyRequiredFonts()
 
         // Created first, before anything else in this method that could fail — a plain AppKit
-        // NSStatusItem is about as close to guaranteed-to-work as menu bar UI gets, unlike
-        // SwiftUI's MenuBarExtra (JBLCompanionApp), so this exists specifically so the app is
-        // never completely inaccessible even if something downstream silently fails to show.
+        // NSStatusItem is about as close to guaranteed-to-work as menu bar UI gets. This is now
+        // the app's only menu bar item (JBLCompanionApp no longer declares its own MenuBarExtra —
+        // two status items for one app was the actual bug "fallback" implied fixing).
         setupFallbackStatusItem()
+        startObservingHeadphoneStateForMenuBarIcon()
 
         classicMonitor.delegate = self
 
@@ -101,7 +109,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupFallbackStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "headphones", accessibilityDescription: "JBL Companion")
+        fallbackStatusItem = item
+        updateMenuBarIcon() // reflects the real (disconnected) state immediately, not the SF Symbol placeholder it replaces.
 
         let menu = NSMenu()
         menu.delegate = self
@@ -127,8 +136,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(quitItem)
 
         item.menu = menu
-        fallbackStatusItem = item
         logger.info("Fallback NSStatusItem created")
+    }
+
+    // MARK: - Menu bar icon by mode (design/DESIGN_GUIDE.md §7)
+
+    /// Reflects `headphoneState` right now — called once at setup and again on every change (see
+    /// `startObservingHeadphoneStateForMenuBarIcon`). MenuBarIconResolver reads only the confirmed
+    /// `noiseMode`, never `pendingNoiseMode` — CLAUDE.md: "A mode is shown as active only after a
+    /// 5C status event."
+    private func updateMenuBarIcon() {
+        let assetName = MenuBarIconResolver.assetName(connection: headphoneState.connection, confirmedMode: headphoneState.noiseMode)
+        let image = NSImage(named: assetName)
+        // Explicit, not left to the asset catalog's own "Render As: Template" setting (which is
+        // already on for all four MenuBar* assets) — macOS only tints a template image for light
+        // and dark menu bars when this is true, and setting it here keeps that guarantee visible
+        // in code rather than silently trusting catalog metadata.
+        image?.isTemplate = true
+        fallbackStatusItem?.button?.image = image
+    }
+
+    /// HeadphoneState is @Observable, but AppDelegate is plain AppKit, not a SwiftUI view, so
+    /// nothing re-renders it automatically. `withObservationTracking` is the general-purpose
+    /// Observation API for exactly this: the first closure's reads register the dependency, and
+    /// `onChange` fires once when any of them change — re-arming itself each time is what keeps
+    /// this running for the app's whole lifetime rather than firing only once. This reacts
+    /// correctly to every mutation site (AppDelegate's own connect/disconnect handling *and*
+    /// NoiseModeRequestCoordinator's confirmed-mode updates) without needing a manual update call
+    /// at each one — the coordinator is Bluetooth-layer code this task doesn't touch.
+    private func startObservingHeadphoneStateForMenuBarIcon() {
+        withObservationTracking {
+            _ = headphoneState.connection
+            _ = headphoneState.noiseMode
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.updateMenuBarIcon()
+                self?.startObservingHeadphoneStateForMenuBarIcon() // re-arms itself — see this method's own doc comment.
+            }
+        }
     }
 
     @objc private func toggleShowNotchFromFallback() {
@@ -249,29 +294,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Plain-text snapshot of the noise-control link's state, for the "Copy Diagnostics" menu
     /// item. Read-only — only reads already-tracked state, never touches the headphones.
     func diagnosticsText() -> String {
-        guard let session = activeSession else {
-            return """
+        var base: String
+        if let session = activeSession {
+            base = """
+            JBLCompanion diagnostics
+            Matched profile: \(session.profile.displayName) (classicNameMatch=\(session.profile.classicNameMatch), addressConfirmed=\(session.addressConfirmed))
+            Connected address: \(session.connectedAddress)
+            Classic connection: \(classicMonitor.isConnectedDescription)
+            HeadphoneState.connection: \(headphoneState.connection)
+            RFCOMM state: \(session.rfcommLink.channelStateDescription)
+            Last RFCOMM open IOReturn: \(session.rfcommLink.lastOpenIOReturn ?? "never attempted")
+            RFCOMM open retry count: \(session.rfcommLink.openRetryCount)
+            Last frames received: \(session.rfcommLink.recentFrameDescriptions.isEmpty ? "none" : session.rfcommLink.recentFrameDescriptions.joined(separator: " | "))
+            Reassembler stats: \(session.rfcommLink.reassemblerStatsDescription)
+            Event map verified: \(session.profile.eventMapVerified)
+            Noise mode: \(headphoneState.noiseMode.displayText)
+            Pending noise mode: \(headphoneState.pendingNoiseMode?.displayText ?? "none")
+            """
+        } else {
+            base = """
             JBLCompanion diagnostics
             Matched profile: none
             Classic connection: \(classicMonitor.isConnectedDescription)
             HeadphoneState.connection: \(headphoneState.connection)
             """
         }
-        return """
-        JBLCompanion diagnostics
-        Matched profile: \(session.profile.displayName) (classicNameMatch=\(session.profile.classicNameMatch), addressConfirmed=\(session.addressConfirmed))
-        Connected address: \(session.connectedAddress)
-        Classic connection: \(classicMonitor.isConnectedDescription)
-        HeadphoneState.connection: \(headphoneState.connection)
-        RFCOMM state: \(session.rfcommLink.channelStateDescription)
-        Last RFCOMM open IOReturn: \(session.rfcommLink.lastOpenIOReturn ?? "never attempted")
-        RFCOMM open retry count: \(session.rfcommLink.openRetryCount)
-        Last frames received: \(session.rfcommLink.recentFrameDescriptions.isEmpty ? "none" : session.rfcommLink.recentFrameDescriptions.joined(separator: " | "))
-        Reassembler stats: \(session.rfcommLink.reassemblerStatsDescription)
-        Event map verified: \(session.profile.eventMapVerified)
-        Noise mode: \(headphoneState.noiseMode.displayText)
-        Pending noise mode: \(headphoneState.pendingNoiseMode?.displayText ?? "none")
-        """
+        #if DEBUG
+        // "Send test frame…" has no dropdown of its own to show the events it collects now that
+        // the fallback menu is the app's only one — folded into Copy Diagnostics instead, the
+        // other surface this task asks to keep working, rather than losing that feedback entirely.
+        let recent = headphoneState.debugRecentEvents.isEmpty ? "none" : headphoneState.debugRecentEvents.joined(separator: " | ")
+        base += "\nRecent test-frame events: \(recent)"
+        #endif
+        return base
     }
 }
 
@@ -359,14 +414,52 @@ extension AppDelegate: BLEBatteryLinkDelegate {
 }
 
 extension AppDelegate: NSMenuDelegate {
-    /// Refreshes the fallback menu's "Show Notch" checkmark right before it opens, rather than
-    /// trying to keep it in sync after every toggle — the SwiftUI MenuBarExtra's own Toggle can
-    /// also change the same UserDefaults key, and this way both surfaces always agree.
+    /// Refreshes the fallback menu's "Show Notch" checkmark, and (DEBUG only) rebuilds the "Send
+    /// test frame…" items from whichever modes the currently active profile has verified, right
+    /// before the menu opens — simpler than trying to keep either in sync after every change
+    /// elsewhere (a profile match, a toggle from some other surface).
     func menuWillOpen(_ menu: NSMenu) {
         guard menu === fallbackStatusItem?.menu else { return }
         let showing = UserDefaults.standard.object(forKey: "showNotchCircle") as? Bool ?? true
         menu.item(withTitle: "Show Notch")?.state = showing ? .on : .off
+        #if DEBUG
+        rebuildDebugTestFrameMenuItems(in: menu)
+        #endif
     }
+
+    #if DEBUG
+    /// Inserted right before "Quit" — removes whatever this added last time first, so switching
+    /// profiles (or losing the connection entirely) never leaves a stale mode's item behind.
+    private func rebuildDebugTestFrameMenuItems(in menu: NSMenu) {
+        for item in debugTestFrameMenuItems { menu.removeItem(item) }
+        debugTestFrameMenuItems = []
+        guard !debugTestableModes.isEmpty, let quitIndex = menu.items.firstIndex(where: { $0.action == #selector(quitFromFallback) })
+        else { return }
+
+        var insertAt = quitIndex
+        let separator = NSMenuItem.separator()
+        menu.insertItem(separator, at: insertAt)
+        debugTestFrameMenuItems.append(separator)
+        insertAt += 1
+
+        for mode in debugTestableModes {
+            let item = NSMenuItem(
+                title: "Send test frame: \(mode.displayText)", action: #selector(sendDebugTestFrameFromFallback(_:)), keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = mode
+            item.isEnabled = headphoneState.pendingNoiseMode == nil
+            menu.insertItem(item, at: insertAt)
+            debugTestFrameMenuItems.append(item)
+            insertAt += 1
+        }
+    }
+
+    @objc private func sendDebugTestFrameFromFallback(_ sender: NSMenuItem) {
+        guard let mode = sender.representedObject as? CommandableNoiseMode else { return }
+        sendDebugTestFrame(mode)
+    }
+    #endif
 }
 
 extension AppDelegate: RFCOMMRaceLinkDelegate {

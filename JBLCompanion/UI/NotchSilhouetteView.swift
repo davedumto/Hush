@@ -9,10 +9,6 @@ final class NotchSilhouetteView: NSView {
     private static let motionKey = "islandResize"
 
     private let shapeLayer = CAShapeLayer()
-    /// Traces the exact same path as `shapeLayer`, stroked — the brand-accent outline around the
-    /// island, kept in sync through every animation frame rather than drawn separately in SwiftUI,
-    /// since only the native layer actually knows the live shape mid-resize.
-    private let edgeLayer = CAShapeLayer()
     private var animationGeneration = 0
     private var pressedInside = false
     private var hoverTrackingArea: NSTrackingArea?
@@ -47,27 +43,6 @@ final class NotchSilhouetteView: NSView {
         // Default is black because that was the only color this silhouette ever needed before the
         // hush. restyle, which made both the pill and the card's own frame theme-aware (white in
         // light, black in dark) — see `setFillColor`.
-
-        edgeLayer.fillColor = nil
-        edgeLayer.strokeColor = nil // starts hidden — see setEdgeVisible; collapsed never shows it.
-        edgeLayer.lineWidth = 1.5
-        layer?.addSublayer(edgeLayer)
-    }
-
-    private static let edgeOrange = NSColor(calibratedRed: 1.0, green: 0.45, blue: 0.05, alpha: 0.9).cgColor
-
-    /// The orange outline is a card-only accent (ExpandedCard draws its own copy of it once real
-    /// content is showing — see that view's own doc comment) — the collapsed pill has its own,
-    /// much subtler SwiftUI-level border (CollapsedPill's `borderColor`) and was never meant to
-    /// show this orange one at all. Call before every resize, same as `setFillColor`, so the
-    /// stroke is already in the right state for the whole swing, not just once it settles.
-    func setEdgeVisible(_ visible: Bool) {
-        let target: CGColor? = visible ? Self.edgeOrange : nil
-        guard edgeLayer.strokeColor != target else { return }
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        edgeLayer.strokeColor = target
-        CATransaction.commit()
     }
 
     required init?(coder: NSCoder) {
@@ -161,7 +136,6 @@ final class NotchSilhouetteView: NSView {
 
         frame = CGRect(origin: .zero, size: envelopeSize)
         shapeLayer.frame = CGRect(origin: .zero, size: envelopeSize)
-        edgeLayer.frame = CGRect(origin: .zero, size: envelopeSize)
 
         // Flush against the docked edge's own side (nothing needs to render past a flush edge),
         // centered on the perpendicular axis — mirrors NotchPanel.contentOrigin(for:envelopeSize:)
@@ -185,14 +159,11 @@ final class NotchSilhouetteView: NSView {
         // 0 = flush card shape, 1 = full pill — interpolated continuously, not switched at a threshold.
         let startPillness: Double = startGap != nil ? 1 : 0
         let targetPillness: Double = targetGap != nil ? 1 : 0
-        // A stroke centers on its path: half of edgeLayer.lineWidth needs to fit *outside* the
-        // fill's own boundary without hitting the view's literal edge. vorssaint's real outline
-        // doesn't fight this — it reserves actual room for the outline in its geometry, so the
-        // fill is never flush with the window edge in the first place, even when "attached."
-        // Same idea here: the fill is never allowed to sit flush with 0 — there's always at
-        // least this much margin, regardless of floating-gap state, so the stroke always has
-        // somewhere to live.
-        let minimumEdgeMargin = edgeLayer.lineWidth / 2 + 0.5
+        // The fill is never allowed to sit flush with 0 — there's always at least this much
+        // margin, regardless of floating-gap state, so nothing renders exactly at the view's own
+        // pixel edge (antialiasing/clipping artifacts there, not a stroke's own clearance — this
+        // native layer no longer draws one at all; see ExpandedCard.frame's own doc comment).
+        let minimumEdgeMargin: CGFloat = 0.5
         func insetAndRadius(for size: CGSize, at t: Double) -> (inset: CGFloat, radius: CGFloat) {
             let pillness = CGFloat(startPillness + (targetPillness - startPillness) * t)
             let rawInset = (startGap ?? 0) + ((targetGap ?? 0) - (startGap ?? 0)) * CGFloat(t)
@@ -205,8 +176,6 @@ final class NotchSilhouetteView: NSView {
             var transform = CGAffineTransform(translationX: origin(for: size).x, y: origin(for: size).y)
             return raw.copy(using: &transform) ?? raw
         }
-        // The edge stroke uses this exact same path as the fill — with the minimum margin above,
-        // the stroke always fits inside the view's own bounds without needing separate inset math.
         func fillPath(for size: CGSize, at t: Double) -> CGPath {
             let (inset, radius) = insetAndRadius(for: size, at: t)
             return translated(IslandShape.path(size: size, inset: inset, cornerRadius: radius), for: size)
@@ -215,9 +184,7 @@ final class NotchSilhouetteView: NSView {
         if reduceMotion {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            let path = fillPath(for: target, at: 1)
-            shapeLayer.path = path
-            edgeLayer.path = path
+            shapeLayer.path = fillPath(for: target, at: 1)
             CATransaction.commit()
             completion()
             return
@@ -237,17 +204,11 @@ final class NotchSilhouetteView: NSView {
         CATransaction.setDisableActions(true)
         shapeLayer.path = fillPaths.last
         shapeLayer.add(animation, forKey: Self.motionKey)
-        edgeLayer.path = fillPaths.last
-        if let edgeAnimation = animation.copy() as? CAKeyframeAnimation {
-            edgeAnimation.delegate = nil
-            edgeLayer.add(edgeAnimation, forKey: Self.motionKey)
-        }
         CATransaction.commit()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
             guard let self, generation == self.animationGeneration else { return }
             self.shapeLayer.removeAnimation(forKey: Self.motionKey)
-            self.edgeLayer.removeAnimation(forKey: Self.motionKey)
             completion()
         }
     }
