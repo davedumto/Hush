@@ -159,7 +159,17 @@ final class NotchPanel: NSPanel {
 
         hosting = NSHostingView(
             rootView: NotchView(
-                state: headphoneState, uiState: uiState, collapsedSize: { [weak self] in self?.currentSize ?? .zero },
+                state: headphoneState, uiState: uiState,
+                // The pill's own natural size for the current edge — NOT `currentSize`, which
+                // `present()` mutates to the *target* size immediately when a transition starts,
+                // well before `uiState.isExpanded` itself flips. If anything else triggers a
+                // SwiftUI re-render of NotchView in that window (any other @Observable state
+                // changing at the same moment), the outgoing CollapsedPill would re-measure
+                // itself against the already-mutated, now-expanded `currentSize` instead of its
+                // own real size — sizing itself as if it were the card it's being replaced by.
+                collapsedSize: { [weak self] in
+                    self.map { Self.collapsedSize(for: $0.edge, geometry: $0.geometry) } ?? .zero
+                },
                 onSelectNoiseMode: onSelectNoiseMode, isModeVerified: isModeVerified,
                 supportsNoiseControl: supportsNoiseControl, isNotched: { [weak self] in self?.isNotched ?? false },
                 dockEdge: { [weak self] in self?.edge ?? .top },
