@@ -104,31 +104,36 @@ struct NotchView: View {
     @Namespace private var photoFlight
 
     var body: some View {
-        // A ZStack, not a plain Group — §9.1/§9.2 need the outgoing and incoming view to coexist
-        // and cross-fade (pill scaling to 0.5 while the card scales up from 0.1, or the reverse),
-        // not an instant swap. Aligned to the docked edge so the much-smaller pill lines up with
-        // where the card's own edge sits, both within NotchPanel's content frame (sized to the
-        // larger of the two for the whole transition — see NotchPanel.present()'s own doc comment
-        // on `contentLayoutSize`).
+        // The pill is always mounted, in its one stable, correct position — never conditionally
+        // inserted/removed, never part of SwiftUI's `.transition()` system at all. Repeated real-
+        // hardware testing showed the pill, specifically, rendering in the wrong place for a frame
+        // or two during its own insertion/removal transition, surviving several independent
+        // geometry fixes (window envelope sizing, forced layout passes, explicit stack sizing, the
+        // collapsedSize race) — the transition system itself was the common factor every time.
+        // Instead: hide it with a plain, unanimated opacity flip the instant the card is about to
+        // cover it, and let it reappear the same way, instantly, the instant the card goes away —
+        // `.transaction { $0.animation = nil }` strips any animation from *this* opacity change
+        // specifically, regardless of the `withAnimation` the card's own transition below runs
+        // under in the same update. The card, confirmed correct across every one of those same
+        // fixes, keeps its own `.transition()` — only the pill's own position/visibility needed to
+        // stop being animated, not the whole crossfade.
         ZStack(alignment: dockEdge().edgeAlignment) {
+            collapsedContent
+                .opacity(uiState.isExpanded ? 0 : 1)
+                .allowsHitTesting(!uiState.isExpanded)
+                .transaction { $0.animation = nil }
+
             if uiState.isExpanded {
                 expandedContent
                     .transition(cardTransition)
-            } else {
-                collapsedContent
-                    .transition(pillTransition)
             }
         }
-        // Explicit, not left to size itself off whichever children happen to be mounted: with no
-        // frame of its own, this ZStack's ideal size is just its *current* child's ideal size —
-        // the 46x34 pill's, right up until the instant the card is inserted alongside it, at
-        // which point the stack's own ideal size jumps to the card's in the very same transaction
-        // as the pill's own removal animation. Animating an alignment-positioned view's place
-        // across a container that is itself resizing underneath it, in that same beat, is exactly
-        // the kind of thing that reads as "renders in the wrong spot for a frame, then corrects" —
-        // pinning this to `.infinity` ties the stack's size to hosting's own externally-set AppKit
-        // frame instead (stable for the whole swing — see NotchPanel.present()'s own doc comment
-        // on `contentLayoutSize`), never to its children's union.
+        // Explicit, not left to size itself off whichever children happen to be mounted — see the
+        // card's own insertion/removal above: with no frame of its own, this ZStack's ideal size
+        // would jump between the pill's and the card's depending on which happens to be mounted,
+        // in the very same transaction as whichever one is animating. Pinning this to `.infinity`
+        // ties the stack's size to hosting's own externally-set AppKit frame instead (stable for
+        // the whole swing — see NotchPanel.present()'s own doc comment on `contentLayoutSize`).
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.clear)
     }
@@ -147,13 +152,6 @@ struct NotchView: View {
         return AnyTransition
             .scale(scale: MotionConstants.cardTransitionScale, anchor: dockEdge().edgeUnitPoint)
             .combined(with: .opacity)
-    }
-
-    /// §9.1 point 4 / §9.2 point 3: "the pill fades out/in and scales to/from 0.5." Plain opacity
-    /// under Reduce Motion, same reasoning as `cardTransition`.
-    private var pillTransition: AnyTransition {
-        guard !reduceMotion else { return .opacity }
-        return .scale(scale: MotionConstants.pillTransitionScale).combined(with: .opacity)
     }
 
     @ViewBuilder

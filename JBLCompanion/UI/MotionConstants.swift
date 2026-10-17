@@ -24,8 +24,6 @@ enum MotionConstants {
     /// §9.6: "Expand, collapse and mode changes become a 160 ms ease in out crossfade" under Reduce Motion.
     static let reducedMotionCrossfadeDuration: Double = 0.16
 
-    /// §9.1 point 4 / §9.2 point 3: the pill scales to/from this while the card takes over.
-    static let pillTransitionScale: CGFloat = 0.5
     /// §9.1 point 2: the card itself starts/ends its own scale transition here.
     static let cardTransitionScale: CGFloat = 0.1
 
