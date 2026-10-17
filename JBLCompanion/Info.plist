@@ -27,6 +27,6 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Hush connects to your headphones to show battery and control noise cancelling.</string>
+	<string>Hush connects to your headphones and lets you control your JBL headphones from the menu bar.</string>
 </dict>
 </plist>
