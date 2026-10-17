@@ -199,11 +199,19 @@ struct NotchView: View {
     /// pill at the new edge's position, and with both views sharing one matchedGeometryEffect id
     /// at that moment, SwiftUI snapped the already-settled card's photo down to the pill's small,
     /// edge-anchored frame — the photo either vanished (clipped inside the card at top/bottom) or
-    /// showed as a stray sliver at the screen edge (left/right). Only share the id while a flight
-    /// could actually be happening (`isAnimating` covers the whole expand/collapse swing, per
-    /// `NotchPanel.present()`), so a later geometry-only change can't re-sync it once settled.
+    /// showed as a stray sliver at the screen edge (left/right).
+    ///
+    /// Only drop the shared id during the one state that actually caused that: fully expanded and
+    /// settled (`isExpanded && !isAnimating`). Every other state — resting collapsed, and both
+    /// directions of the swing — keeps it, deliberately wider than gating on `isAnimating` alone:
+    /// severing the link right as `isAnimating` first flips true (the same render pass that
+    /// re-inserts ExpandedCard, e.g. right after an edge-switch's collapse-move-expand cycle) gave
+    /// matchedGeometryEffect nothing "warm" to interpolate the hero photo from on its very first
+    /// frame — a brief missing-image flash before it caught up. Keeping the pill's side of the id
+    /// continuously live through the whole collapsed lifecycle, right up to the moment it's needed,
+    /// avoids that cold start while still protecting the settled-expanded state.
     private var pillPhotoNamespace: Namespace.ID? {
-        uiState.isAnimating ? photoFlight : nil
+        (!uiState.isExpanded || uiState.isAnimating) ? photoFlight : nil
     }
 
     /// design/DESIGN_GUIDE.md §5 "Connecting": the classic link is up but no status event has
