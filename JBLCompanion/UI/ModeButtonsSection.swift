@@ -110,6 +110,21 @@ struct ModeButtonsSection: View {
 
 // MARK: - One button
 
+/// `.buttonStyle(.plain)` dims a `.disabled` button's content on macOS — including the active
+/// button, which is disabled too (`isInteractive` is false for it, same as every non-`.available`
+/// state; see `ModeButtonResolver.isInteractive`), so the system's own disabled-dimming muted its
+/// solid-orange fill to a dull brownish tone. `.disabled(!isInteractive)` is still exactly right
+/// for behavior/accessibility (a disabled button is correctly unreachable to VoiceOver/Tab focus,
+/// unresponsive to clicks) — the visual *look* of each state is already fully specified by
+/// `fillColor`/`borderColor`/`labelOpacity` above, so nothing here should be re-dimming any of
+/// them on top of that. A style with no dimming of its own fixes the look without touching either.
+private struct ModeButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
 private struct ModeButtonView: View {
     let mode: CommandableNoiseMode
     let dock: CardDock
@@ -162,7 +177,7 @@ private struct ModeButtonView: View {
                     }
                 }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(ModeButtonStyle())
         .disabled(!isInteractive)
         .onHover { isHovered = $0 }
         .modifier(Shake(animatableData: CGFloat(shakeTrigger)))

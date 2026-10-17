@@ -49,8 +49,7 @@ struct ExpandedCard: View {
         isVertical ? CGSize(width: 296, height: 500) : CGSize(width: 374, height: 500)
     }
     private var heroHeight: CGFloat { isVertical ? 196 : 236 }
-    private var photoHeight: CGFloat { isVertical ? 168 : 206 }
-    private var modelNumberFontSize: CGFloat { isVertical ? 112 : 150 }
+    private var photoHeight: CGFloat { isVertical ? 158 : 192 }
     private var tabLengthAlongEdge: CGFloat { isVertical ? 92 : 116 }
     // Floored at CutoutTabShape's outerCornerRadius (18): canonicalTopPath's straight wall
     // segment length is depthIntoPanel - outerCornerRadius, so going lower makes that segment
@@ -103,19 +102,12 @@ struct ExpandedCard: View {
     // MARK: - Frame + panel
 
     private var frame: some View {
-        // design/DESIGN_GUIDE.md §4 "Frame and panel": CardFrame fill, corner radius 33. The
-        // guide specifies a light-theme-only drop shadow here and no border at all; both are
-        // deliberately overridden on owner request (CLAUDE.md's deviations list) — the orange
-        // border alone separates the card from whatever's behind it, no shadow needed on top of
-        // it. Unlike an earlier version of this border, this is SwiftUI-only — no matching native
-        // silhouette edgeLayer — so it's absent for the brief window where only the native
-        // backdrop is visible (the collapse/expand swing itself), not the settled state.
+        // design/DESIGN_GUIDE.md §4 "Frame and panel": CardFrame fill, corner radius 33, no
+        // border. An orange border was added here on owner request earlier, then explicitly
+        // removed again on owner request after a closer design review — CLAUDE.md's deviations
+        // list is updated to match; this is the second and (per that review) final word on it.
         RoundedRectangle(cornerRadius: 33, style: .continuous)
             .fill(Theme.Semantic.cardFrame)
-            .overlay(
-                RoundedRectangle(cornerRadius: 33, style: .continuous)
-                    .strokeBorder(Theme.Brand.orange.opacity(0.9), lineWidth: 1.5)
-            )
     }
 
     private var panelContent: some View {
@@ -214,7 +206,7 @@ struct ExpandedCard: View {
         } else {
             HStack(spacing: 6) {
                 markGlyph(size: 18, color: markColor)
-                Text("hush.")
+                Text("hush")
                     .font(Theme.Fonts.tabWordmark)
                     .foregroundStyle(markColor)
                 + Text(".").foregroundStyle(Theme.Brand.orange).font(Theme.Fonts.tabWordmark)
@@ -359,9 +351,13 @@ struct ExpandedCard: View {
                         .position(x: geo.size.width / 2, y: heroHeight - 13)
                 }
 
+                // SwiftUI's Text frame top is the font ascender, not the glyph top — Fredoka-Bold's
+                // own digits sit 0.273 x font size below it (ascender 974, cap height 701,
+                // units-per-em 1000). Target is the digit top 6pt below the hero top (9pt side
+                // docks): offset = 6 - 0.273*168 = -40 (top/bottom docks), 9 - 0.273*124 = -25 (side).
                 modelNumberView
-                    .frame(maxWidth: .infinity, alignment: .top)
-                    .padding(.top, 4)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .offset(y: isVertical ? -25 : -40)
 
                 // §4: "Centred, bottom aligned" — not leading-aligned.
                 photoView
@@ -384,25 +380,45 @@ struct ExpandedCard: View {
         .frame(height: heroHeight)
     }
 
+    /// Sized/tracked/gradient-stopped precisely for Fredoka-Bold's own metrics (ascender 974, cap
+    /// height 701, units-per-em 1000) so the digits land exactly 6pt (side docks 9pt) below the
+    /// hero top — see the `.offset` on this view's own placement in `heroSection` for the rest of
+    /// that math. Previous version sank toward the hero's bottom-trailing-aligned ZStack with only
+    /// a bare `.frame(maxWidth: .infinity)` and no vertical anchor of its own, landing almost
+    /// entirely behind the photo instead of peeking out above it — not a hidden/masked/zero-opacity
+    /// bug, a geometry one.
     private var modelNumberView: some View {
-        Text(ExpandedCardContent.heroNumberText(from: state.modelNumberText))
-            .font(Theme.Fonts.modelNumber(sideDock: isVertical))
-            .tracking(-7.5)
-            .foregroundStyle(
-                LinearGradient(
-                    colors: [Theme.Semantic.modelNumberTop, Theme.Semantic.modelNumberBottom],
-                    startPoint: .top, endPoint: .bottom
-                )
-            )
-            // Light theme's number is solid white (§8), unlike dark theme's own naturally-subtle
-            // navy-on-navy gradient — without this, the edges exposed past the (also white, in
-            // light theme) photo read as a flat competing blob rather than a layered watermark.
-            .shadow(color: Theme.Brand.black.opacity(colorScheme == .dark ? 0 : 0.14), radius: 6, x: 0, y: 3)
+        let size: CGFloat = isVertical ? 124 : 168
+        return Text(ExpandedCardContent.heroNumberText(from: state.modelNumberText))
+            .font(.custom("Fredoka-Bold", size: size))
+            .tracking(isVertical ? -1.2 : -1.7)
+            .lineLimit(1)
+            .fixedSize()
+            .foregroundStyle(modelNumberGradient)
             // §5 "Connecting": "model number at 35%". Empty (no-device, or nothing matched yet)
             // always wins regardless of condition — there's nothing to fade in at any opacity.
             .opacity(state.modelNumberText.isEmpty ? 0 : (isConnecting ? 0.35 : 1))
-            .lineLimit(1)
-            .minimumScaleFactor(0.5)
+            .allowsHitTesting(false)
+    }
+
+    /// Fades the digits out toward the hero's own interior (not a flat two-stop gradient) so the
+    /// part that peeks out above the photo reads as a genuine watermark, not a hard-edged shape
+    /// competing with it. Stop locations are tuned against a Text frame height of 1.21x the font
+    /// size (ascender + descender, line gap 0) — Fredoka-Bold's own metrics.
+    private var modelNumberGradient: LinearGradient {
+        let stops: [Gradient.Stop] = colorScheme == .dark
+            ? [
+                .init(color: Color(red: 0.227, green: 0.435, blue: 0.682), location: 0.09), // #3A6FAE
+                .init(color: Color(red: 0.165, green: 0.337, blue: 0.533), location: 0.42), // #2A5688
+                .init(color: Theme.Brand.navy.opacity(0), location: 0.77),
+            ]
+            : [
+                .init(color: .white, location: 0.09),
+                .init(color: .white, location: 0.385),
+                .init(color: .white.opacity(0.22), location: 0.67),
+                .init(color: .white.opacity(0), location: 0.83),
+            ]
+        return LinearGradient(stops: stops, startPoint: .top, endPoint: .bottom)
     }
 
     @ViewBuilder
@@ -412,7 +428,18 @@ struct ExpandedCard: View {
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(height: photoHeight)
-                .shadow(color: Theme.Brand.black.opacity(0.55), radius: 13, x: 0, y: 11)
+                .shadow(
+                    color: colorScheme == .dark ? Theme.Brand.black.opacity(0.55) : .clear,
+                    radius: 13, x: 0, y: 22
+                )
+                // Light theme: a tight, almost-unblurred shadow first (the edge that actually
+                // separates the white headphones from the white model number behind them — a
+                // soft 13pt blur alone wasn't enough contrast right at the silhouette's own
+                // boundary), then the normal soft drop shadow. Order matters: SwiftUI stacks
+                // multiple `.shadow` modifiers in the order applied, each rendered under the
+                // previous, so the tight edge-defining one has to be applied first.
+                .shadow(color: colorScheme == .dark ? .clear : Theme.Brand.deepNavy.opacity(0.55), radius: 0.5, x: 0, y: 0)
+                .shadow(color: colorScheme == .dark ? .clear : Theme.Brand.deepNavy.opacity(0.6), radius: 13, x: 0, y: 18)
                 // §5 "Connecting": "photo at 30% and fully desaturated".
                 .opacity(isConnecting ? 0.3 : 1)
                 .saturation(isConnecting ? 0 : 1)
@@ -475,13 +502,12 @@ struct ExpandedCard: View {
     @State private var lowBatteryPulse = false
 
     private func batteryChipBody(eyebrow: String, value: String, fraction: Double, isLow: Bool) -> some View {
-        // Low battery's chip is solid BrandOrange in both themes, so white ink always has plenty
-        // of contrast there. The normal GlassFill chip is a different story: in light theme its
-        // translucent-white fill sits over an already-brighter panel and reads pale, not dark, so
-        // white text loses contrast against it — dark navy ink is what the chip actually needs
-        // there, same reasoning as ChipInk for the model chip.
-        let valueColor: Color = isLow ? .white : (colorScheme == .dark ? .white : Theme.Brand.navy)
-        let eyebrowColor: Color = isLow ? .white.opacity(0.85) : (colorScheme == .dark ? Theme.Semantic.textSecondary.opacity(0.8) : Theme.Brand.navy.opacity(0.6))
+        // The panel is navy in both themes (never a bright/light surface the chip sits on), so
+        // the chip's own ink stays white in both themes too — no colorScheme branch needed here.
+        // A light-theme-specific "navy ink for contrast" branch existed before for a contrast
+        // concern that assumed a lighter panel; it doesn't apply to this panel's actual color.
+        let valueColor: Color = .white
+        let eyebrowColor: Color = isLow ? .white.opacity(0.85) : Theme.Semantic.textSecondary.opacity(0.8)
 
         return VStack(alignment: .leading, spacing: 3) {
             Text(eyebrow)
@@ -494,7 +520,7 @@ struct ExpandedCard: View {
                 .foregroundStyle(valueColor)
             ZStack(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(isLow ? Color.black.opacity(0.25) : (colorScheme == .dark ? Color.white.opacity(0.18) : Theme.Brand.navy.opacity(0.18)))
+                    .fill(isLow ? Color.black.opacity(0.25) : Color.white.opacity(0.18))
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
                     .fill(isLow ? Color.white : Theme.Brand.orange)
                     .frame(width: max(0, min(1, fraction)) * 52)

@@ -42,7 +42,7 @@ enum Theme {
     /// case SwiftUI silently falls back to the system font rather than crashing.
     enum Fonts {
         static func modelNumber(sideDock: Bool = false) -> Font {
-            .custom("Fredoka-Bold", size: sideDock ? 112 : 150)
+            .custom("Fredoka-Bold", size: sideDock ? 124 : 168)
         }
         static let deviceName = Font.custom("Fredoka-SemiBold", size: 19)
         static let batteryValue = Font.custom("Fredoka-SemiBold", size: 19)

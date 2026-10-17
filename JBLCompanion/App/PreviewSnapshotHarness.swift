@@ -116,6 +116,11 @@ enum PreviewSnapshotHarness {
             Scenario(name: "card-right-770-dark", colorScheme: .dark, content: card(s770, .right)),
             Scenario(name: "card-right-770-light", colorScheme: .light, content: card(s770, .right)),
             Scenario(name: "card-03-top-670-dark", colorScheme: .dark, content: card(s670, .top)),
+            // 670NC, light, connected, with its own real verified-mode set (matchedProfileIsModeVerified
+            // — mode != .off — exactly Tune670NCProfile.isModeVerified's own hardware-verified data,
+            // not a stand-in) — the only existing 670-light scenario before this was controlsUnavailable
+            // (all four modes forced unverified), which isn't what this model's real profile reports.
+            Scenario(name: "card-670-light-working-controls", colorScheme: .light, content: card(s670, .top)),
             Scenario(name: "card-lowbattery-dark", colorScheme: .dark, content: card(lowBattery, .top)),
             Scenario(name: "card-lowbattery-light", colorScheme: .light, content: card(lowBattery, .top)),
             Scenario(name: "card-19-connecting-dark", colorScheme: .dark, content: card(connecting, .top)),
