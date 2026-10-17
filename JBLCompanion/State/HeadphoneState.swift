@@ -13,11 +13,14 @@ enum NoiseMode {
     case talkThru
     case unknown
 
+    // "Ambient", not "Ambient Aware" — design/DESIGN_GUIDE.md §4/§9.3 uses the short form
+    // everywhere (button label, status line, "(unverified)" suffix), and this is the one shared
+    // label NoiseModeStatusText/the fallback menu/the mode buttons all read from.
     var displayText: String {
         switch self {
         case .off: return "Off"
         case .anc: return "ANC"
-        case .ambientAware: return "Ambient Aware"
+        case .ambientAware: return "Ambient"
         case .talkThru: return "TalkThru"
         case .unknown: return "—"
         }
@@ -39,7 +42,7 @@ enum CommandableNoiseMode: CaseIterable, Hashable {
         case .off: return "Off"
         case .anc: return "ANC"
         case .talkThru: return "TalkThru"
-        case .ambientAware: return "Ambient Aware"
+        case .ambientAware: return "Ambient"
         }
     }
 }

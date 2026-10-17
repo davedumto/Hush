@@ -226,6 +226,24 @@ final class NoiseModeRequestCoordinatorTests: XCTestCase {
         XCTAssertEqual(sender.requestedModes, [.anc])
     }
 
+    /// A spontaneous mode change (earcup button press) reports straight through
+    /// `handleConfirmation` with no prior `requestMode` call at all — design/DESIGN_GUIDE.md §9.3
+    /// point 5: "apply it the same way as a confirmation, with no pending step."
+    func testHardwareInitiatedChangeAppliesWithNoPendingStep() {
+        let state = HeadphoneState()
+        state.noiseMode = .off
+        let sender = FakeNoiseModeSending()
+        let (coordinator, _) = makeCoordinator(sender: sender, state: state)
+
+        coordinator.handleConfirmation(.talkThru)
+
+        XCTAssertEqual(state.noiseMode, .talkThru)
+        XCTAssertNil(state.pendingNoiseMode)
+        XCTAssertFalse(state.noiseModeConfirmationTimedOut)
+        // Never sent a command on the device's behalf — this was the headphones telling us.
+        XCTAssertTrue(sender.requestedModes.isEmpty)
+    }
+
     func testTimeoutIsANoOpIfConfirmationAlreadyArrived() {
         let state = HeadphoneState()
         let sender = FakeNoiseModeSending()

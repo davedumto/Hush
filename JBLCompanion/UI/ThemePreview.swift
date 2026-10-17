@@ -100,7 +100,7 @@ struct ThemePreview: View {
                 fontRow("Mode label", Theme.Fonts.modeLabel(), sample: "ANC")
                 fontRow("Sub text", Theme.Fonts.subText, sample: "Connected")
                 fontRow("Status mode name", Theme.Fonts.statusModeName, sample: "ANC")
-                fontRow("Status detail", Theme.Fonts.statusDetail, sample: "set by headphones")
+                fontRow("Status detail", Theme.Fonts.statusDetail, sample: "is currently active")
                 fontRow("Model chip", Theme.Fonts.modelChip, sample: "770NC")
                 fontRow("Eyebrow", Theme.Fonts.eyebrow, sample: "BATTERY")
                 fontRow("SOON tag", Theme.Fonts.soonTag(), sample: "SOON")

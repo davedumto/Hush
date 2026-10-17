@@ -27,52 +27,53 @@ enum PreviewSnapshotHarness {
         let content: AnyView
     }
 
-    private static func state(connected: Bool = true, battery: Int? = 82, hasPhoto: Bool = true, deviceName: String = "JBL Tune 770NC", modelNumber: String = "770NC") -> HeadphoneState {
+    private static func state(
+        connected: Bool = true, battery: Int? = 82, hasPhoto: Bool = true,
+        deviceName: String = "JBL Tune 770NC", modelNumber: String = "770NC",
+        noiseMode: NoiseMode = .unknown, pendingNoiseMode: CommandableNoiseMode? = nil,
+        timedOut: Bool = false, eventMapVerified: Bool = true
+    ) -> HeadphoneState {
         let state = HeadphoneState()
         state.connection = connected ? .connected : .disconnected
         state.deviceName = connected ? deviceName : ""
         state.modelNumberText = connected && hasPhoto ? modelNumber : ""
         state.photoAssetNames = connected && hasPhoto ? HeadphonePhotoAssetNames(black: "Tune\(modelNumber.prefix(3))Black", white: "Tune\(modelNumber.prefix(3))White") : nil
         state.batteryPercent = battery
+        state.noiseMode = noiseMode
+        state.pendingNoiseMode = pendingNoiseMode
+        state.noiseModeConfirmationTimedOut = timedOut
+        state.noiseModeEventMapVerified = eventMapVerified
         return state
     }
 
-    private struct SlotStub: View {
-        var body: some View {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("NOISE CONTROL")
-                    .font(.system(size: 10, weight: .bold))
-                    .tracking(0.8)
-                    .foregroundStyle(.white.opacity(0.4))
-                HStack(spacing: 2) {
-                    ForEach(["Off", "ANC", "Ambient", "TalkThru"], id: \.self) { label in
-                        Text(label)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(label == "ANC" ? .black : .white.opacity(0.85))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 5)
-                            .background(label == "ANC" ? Color(red: 1.0, green: 0.40, blue: 0.0) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                    }
-                }
-                .padding(3)
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                HStack(spacing: 5) {
-                    Circle().fill(Color(red: 1.0, green: 0.40, blue: 0.0)).frame(width: 7, height: 7)
-                    Text("ANC").font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
-                    Text("set by headphones").font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
-                }
-            }
-        }
-    }
+    /// Matches Tune770NCProfile/Tune670NCProfile.isModeVerified exactly: Ambient, ANC, and
+    /// TalkThru verified, Off never (no command frame has ever been captured for it) — real
+    /// current profile state, not the design guide's now-outdated per-model disabled lists
+    /// (CLAUDE.md overrides those).
+    private static func matchedProfileIsModeVerified(_ mode: CommandableNoiseMode) -> Bool { mode != .off }
 
     private static var scenarios: [Scenario] {
-        let s770 = state()
-        let s670 = state(deviceName: "JBL Tune 670NC", modelNumber: "670NC")
-        let lowBattery = state(battery: 9)
+        let s770 = state(noiseMode: .anc)
+        let s670 = state(deviceName: "JBL Tune 670NC", modelNumber: "670NC", noiseMode: .anc)
+        let pending = state(noiseMode: .anc, pendingNoiseMode: .ambientAware)
+        let timedOut = state(noiseMode: .ambientAware, timedOut: true)
+        let unverifiedEventMap = state(noiseMode: .anc, eventMapVerified: false)
+        let lowBattery = state(battery: 9, noiseMode: .anc)
         let noDevice = state(connected: false, battery: nil)
 
+        func card(
+            _ st: HeadphoneState, _ dock: CardDock,
+            isModeVerified: @escaping (CommandableNoiseMode) -> Bool, supportsNoiseControl: Bool
+        ) -> AnyView {
+            AnyView(ExpandedCard(state: st, dock: dock, onCollapseTapped: {}) {
+                ModeButtonsSection(
+                    state: st, dock: dock, isModeVerified: isModeVerified,
+                    supportsNoiseControl: supportsNoiseControl, onSelectNoiseMode: { _ in }
+                )
+            })
+        }
         func card(_ st: HeadphoneState, _ dock: CardDock) -> AnyView {
-            AnyView(ExpandedCard(state: st, dock: dock, onCollapseTapped: {}) { SlotStub() })
+            card(st, dock, isModeVerified: matchedProfileIsModeVerified, supportsNoiseControl: true)
         }
         func pill(_ st: HeadphoneState, _ dock: PillDock, connection: PillConnectionState = .connected, scheme: ColorScheme) -> AnyView {
             let variant = PillVariant.resolve(
@@ -86,12 +87,17 @@ enum PreviewSnapshotHarness {
         return [
             Scenario(name: "card-01-top-770-dark", colorScheme: .dark, content: card(s770, .top)),
             Scenario(name: "card-02-top-770-light", colorScheme: .light, content: card(s770, .top)),
+            Scenario(name: "card-05-top-770-dark-ambient-pending", colorScheme: .dark, content: card(pending, .top)),
+            Scenario(name: "card-06-top-770-light-ambient-pending", colorScheme: .light, content: card(pending, .top)),
+            Scenario(name: "card-09-top-770-dark-timed-out-kept-mode", colorScheme: .dark, content: card(timedOut, .top)),
+            Scenario(name: "card-unverified-eventmap-dark", colorScheme: .dark, content: card(unverifiedEventMap, .top)),
             Scenario(name: "card-32-bottom-770-dark", colorScheme: .dark, content: card(s770, .bottom)),
             Scenario(name: "card-31-left-770-dark", colorScheme: .dark, content: card(s770, .left)),
             Scenario(name: "card-30-left-770-light", colorScheme: .light, content: card(s770, .left)),
             Scenario(name: "card-03-top-670-dark", colorScheme: .dark, content: card(s670, .top)),
             Scenario(name: "card-lowbattery-dark", colorScheme: .dark, content: card(lowBattery, .top)),
-            Scenario(name: "card-nodevice-dark", colorScheme: .dark, content: card(noDevice, .top)),
+            Scenario(name: "card-nodevice-dark", colorScheme: .dark, content: card(noDevice, .top, isModeVerified: { _ in false }, supportsNoiseControl: true)),
+            Scenario(name: "card-controls-unsupported-dark", colorScheme: .dark, content: card(s770, .top, isModeVerified: matchedProfileIsModeVerified, supportsNoiseControl: false)),
             Scenario(name: "pill-15-variants-dark", colorScheme: .dark, content: pill(s770, .top(isNotched: false), scheme: .dark)),
             Scenario(name: "pill-16-variants-light", colorScheme: .light, content: pill(s770, .top(isNotched: false), scheme: .light)),
             Scenario(name: "pill-notch-dark", colorScheme: .dark, content: pill(s770, .top(isNotched: true), scheme: .dark)),

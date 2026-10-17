@@ -37,9 +37,6 @@ struct NotchView: View {
 
     @Environment(\.colorScheme) private var colorScheme
 
-    /// JBL's own brand orange — used sparingly, as the one accent color against the black shape.
-    private let accent = Color(red: 1.0, green: 0.45, blue: 0.05)
-
     var body: some View {
         Group {
             if uiState.isExpanded {
@@ -76,93 +73,10 @@ struct NotchView: View {
         // Only the top dock is reachable from live app state today — see ExpandedCard's own doc
         // comment for why bottom/left/right exist (pure logic/previews) but aren't wired in yet.
         ExpandedCard(state: state, dock: .top, onCollapseTapped: onCollapseTabTapped) {
-            noiseControlSection
-        }
-    }
-
-    @ViewBuilder
-    private var noiseControlSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("NOISE CONTROL")
-                .font(.system(size: 10, weight: .bold))
-                .tracking(0.8)
-                .foregroundStyle(.white.opacity(0.4))
-
-            if state.connection == .connected && !supportsNoiseControl() {
-                Text("Controls not available for this model yet")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.5))
-            } else {
-                modeSegments
-                statusCaption
-            }
-        }
-    }
-
-    /// A hand-built segmented control, not SwiftUI's native `.pickerStyle(.segmented)` — that
-    /// style can only enable/disable the whole control at once, and individual segments need to
-    /// be independently disabled here based on `isModeVerified`.
-    @ViewBuilder
-    private var modeSegments: some View {
-        let selected = state.pendingNoiseMode ?? state.noiseMode.commandable
-        HStack(spacing: 2) {
-            ForEach(CommandableNoiseMode.allCases, id: \.self) { mode in
-                let verified = isModeVerified(mode)
-                let isSelected = selected == mode
-                Button {
-                    onSelectNoiseMode(mode)
-                } label: {
-                    Text(segmentLabel(mode))
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(isSelected ? Color.black : .white.opacity(verified ? 0.85 : 0.3))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 5)
-                        .background(
-                            isSelected ? accent : Color.white.opacity(0.001), // near-invisible but still hit-testable
-                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        )
-                }
-                .buttonStyle(.plain)
-                .disabled(state.pendingNoiseMode != nil || !verified)
-            }
-        }
-        .padding(3)
-        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-    }
-
-    private func segmentLabel(_ mode: CommandableNoiseMode) -> String {
-        switch mode {
-        case .off: return "Off"
-        case .anc: return "ANC"
-        case .talkThru: return "TalkThru"
-        case .ambientAware: return "Ambient"
-        }
-    }
-
-    @ViewBuilder
-    private var statusCaption: some View {
-        switch (state.pendingNoiseMode, state.noiseModeConfirmationTimedOut) {
-        case (.some(let pending), _):
-            HStack(spacing: 5) {
-                ProgressView()
-                    .controlSize(.mini)
-                    .tint(accent)
-                Text("Setting \(pending.displayText)…")
-                    .font(.system(size: 11))
-                    .foregroundStyle(accent)
-            }
-        case (nil, true):
-            HStack(spacing: 5) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 10))
-                Text("No confirmation")
-                    .font(.system(size: 11))
-            }
-            .foregroundStyle(.orange)
-        case (nil, false):
-            Text(NoiseModeStatusText.format(mode: state.noiseMode, eventMapVerified: state.noiseModeEventMapVerified))
-                .font(.system(size: 11))
-                .foregroundStyle(.white.opacity(0.5))
+            ModeButtonsSection(
+                state: state, dock: .top, isModeVerified: isModeVerified,
+                supportsNoiseControl: supportsNoiseControl(), onSelectNoiseMode: onSelectNoiseMode
+            )
         }
     }
 }
