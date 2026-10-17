@@ -65,8 +65,6 @@ final class NotchPanel: NSPanel {
 
     private let hoverOpenDelay: TimeInterval = 0.15
     private let hoverCloseDelay: TimeInterval = 0.4
-    private let expandedTopInset: CGFloat = 16
-
     /// Extra transparent room reserved, at rest, around both the pill and the card so their own
     /// shadows/glows (CollapsedPill, ExpandedCard — both reach past their own bounds) aren't
     /// clipped by the window's edge. Symmetric on the sides; reserved below only, since nothing
@@ -78,9 +76,14 @@ final class NotchPanel: NSPanel {
         CGSize(width: contentSize.width + shadowMargin * 2, height: contentSize.height + shadowMargin)
     }
 
-    /// ExpandedCard's own fixed width (design/DESIGN_GUIDE.md §4/§10) — only the top dock is live
+    /// ExpandedCard's own fixed size (design/DESIGN_GUIDE.md §4/§10) — only the top dock is live
     /// today (see ExpandedCard's own doc comment), so this is always the horizontal-dock width.
+    /// A real constant, not a measurement: unlike the old variable-content card this replaced,
+    /// ExpandedCard's height of 470 is fixed regardless of what it's showing, so there's nothing
+    /// to measure — see `expandedSize(for:)`'s own doc comment for why measuring it anyway
+    /// (the previous approach here) was actively wrong, not just redundant.
     private static let expandedCardWidth: CGFloat = 374
+    private static let expandedCardHeight: CGFloat = 470
 
     init(
         headphoneState: HeadphoneState, onSelectNoiseMode: @escaping (CommandableNoiseMode) -> Void,
@@ -405,36 +408,21 @@ final class NotchPanel: NSPanel {
         )
     }
 
+    /// ExpandedCard's own fixed 374x470 (design/DESIGN_GUIDE.md §10), capped against the real
+    /// screen's bounds for safety on a small/unusual display — not measured, since (unlike the
+    /// old variable-content card this replaced) that size no longer depends on what the card is
+    /// actually showing. Measuring it anyway, via a throwaway NSHostingView probe's `fittingSize`,
+    /// is what this function used to do — and it was actively wrong, not just redundant: that
+    /// probe path wasn't exercised by the snapshot-harness comparison (ImageRenderer renders each
+    /// scenario directly, never through `fittingSize`), so it shipped seemingly verified while
+    /// actually under-measuring the card's real height — the window came out too short, and
+    /// content size, which is taken as 100% correct, is being assigned its own documented size
+    /// (470 tall) inside the too-short envelope regardless, pushing the top of the card (and the
+    /// whole top row) up past the window's own top edge where nothing is visible to render it.
     private func expandedSize(for geometry: IslandGeometry) -> CGSize {
-        // ExpandedCard's own fixed width, not IslandSize's compact/spacious/custom options —
-        // those sized the old, much wider card this app no longer has. Still reuses
-        // IslandGeometry's own height capping/screen-bounds logic, just overrides the width it
-        // would otherwise have returned alongside that height.
         let width = min(Self.expandedCardWidth, geometry.screen.width - 24)
-        let contentHeight = measuredExpandedContentHeight(width: width)
-        let sized = geometry.expandedSize(contentHeight: contentHeight, topInset: expandedTopInset)
-        return CGSize(width: width, height: sized.height)
-    }
-
-    /// Measures the real height the expanded card's SwiftUI content needs at `width`, instead of
-    /// guessing a constant — a throwaway probe view so the live `hosting` view's own state/frame
-    /// is never disturbed by the measurement itself.
-    private func measuredExpandedContentHeight(width: CGFloat) -> CGFloat {
-        let probeState = NotchUIState()
-        probeState.isExpanded = true
-        let probe = NSHostingView(
-            rootView: NotchView(
-                state: headphoneState, uiState: probeState, collapsedSize: geometry.collapsedSize,
-                onSelectNoiseMode: { _ in }, isModeVerified: isModeVerified,
-                supportsNoiseControl: supportsNoiseControl, isNotched: { [weak self] in self?.isNotched ?? false },
-                onCollapseTabTapped: {}
-            )
-        )
-        probe.frame = CGRect(x: 0, y: 0, width: max(width, 1), height: 1)
-        probe.layoutSubtreeIfNeeded()
-        let height = probe.fittingSize.height
-        guard height.isFinite, height > 0 else { return 150 } // sane fallback if measurement ever fails
-        return height
+        let height = min(Self.expandedCardHeight, geometry.screen.height - 48)
+        return CGSize(width: width, height: max(80, height))
     }
 
     // MARK: - Present (envelope-then-settle resize)

@@ -211,43 +211,51 @@ struct ExpandedCard<ModeControls: View>: View {
 
     @ViewBuilder
     private var heroSection: some View {
-        ZStack(alignment: .bottomTrailing) {
-            Color.clear
+        // GeometryReader for the hero's own *actual* rendered width — §4's "22% from the left"
+        // etc are percentages of the hero itself, not the outer card, and hand-computing that by
+        // subtracting padding from cardSize (the previous approach) was only an approximation.
+        GeometryReader { geo in
+            ZStack(alignment: .bottomTrailing) {
+                Color.clear
 
-            // §4 hero layers, back to front.
-            if colorScheme == .dark {
-                Ellipse()
-                    .fill(
-                        RadialGradient(
-                            colors: [Theme.Brand.orange.opacity(0.42), Theme.Brand.orange.opacity(0)],
-                            center: .center, startRadius: 0, endRadius: 110
+                // §4 hero layers, back to front.
+                if colorScheme == .dark {
+                    Ellipse()
+                        .fill(
+                            RadialGradient(
+                                colors: [Theme.Brand.orange.opacity(0.42), Theme.Brand.orange.opacity(0)],
+                                center: .center, startRadius: 0, endRadius: 110
+                            )
                         )
-                    )
-                    .frame(width: 220, height: 130)
-                    .blur(radius: 8)
-                    .position(x: (cardSize.width - 28) / 2, y: heroHeight * 0.58)
-            } else {
-                Ellipse()
-                    .fill(
-                        RadialGradient(
-                            colors: [Theme.Brand.black.opacity(0.45), Theme.Brand.black.opacity(0)],
-                            center: .center, startRadius: 0, endRadius: 100
+                        .frame(width: 220, height: 130)
+                        .blur(radius: 8)
+                        .position(x: geo.size.width / 2, y: heroHeight * 0.58)
+                } else {
+                    Ellipse()
+                        .fill(
+                            RadialGradient(
+                                colors: [Theme.Brand.black.opacity(0.45), Theme.Brand.black.opacity(0)],
+                                center: .center, startRadius: 0, endRadius: 100
+                            )
                         )
-                    )
-                    .frame(width: 200, height: 26)
-                    .position(x: (cardSize.width - 28) / 2, y: heroHeight - 13)
+                        .frame(width: 200, height: 26)
+                        .position(x: geo.size.width / 2, y: heroHeight - 13)
+                }
+
+                modelNumberView
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    .padding(.top, 4)
+
+                // §4: "Centred, bottom aligned" — not leading-aligned.
+                photoView
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+
+                hotspot
+                    .position(x: geo.size.width * (isVertical ? 0.14 : 0.22), y: heroHeight * 0.62)
+
+                batteryChip
+                    .padding(.bottom, isVertical ? 6 : 18)
             }
-
-            modelNumberView
-                .frame(maxWidth: .infinity, alignment: .top)
-                .padding(.top, 4)
-
-            photoView
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                .overlay(alignment: .bottomLeading) { hotspot }
-
-            batteryChip
-                .padding(.bottom, isVertical ? 6 : 18)
         }
         .frame(height: heroHeight)
     }
@@ -301,7 +309,6 @@ struct ExpandedCard<ModeControls: View>: View {
                     .frame(width: 11, height: 11)
                     .foregroundStyle(.white)
             )
-            .offset(x: (cardSize.width - panelPadding.leading - panelPadding.trailing) * (isVertical ? 0.14 : 0.22), y: -heroHeight * 0.38)
     }
 
     private var batteryChip: some View {
