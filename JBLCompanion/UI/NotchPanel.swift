@@ -310,6 +310,12 @@ final class NotchPanel: NSPanel {
         offset = currentDisplayUUID.map { IslandSettings.dockOffset(forDisplayUUID: $0, edge: newEdge) } ?? 0
         if let currentDisplayUUID { IslandSettings.setDockEdge(newEdge, forDisplayUUID: currentDisplayUUID) }
         currentSize = Self.collapsedSize(for: newEdge, geometry: geometry)
+        // See NotchUIState.geometryVersion's own doc comment — without this, switching edges
+        // while collapsed (the .moveDirectly case in setDockEdge, which never touches isExpanded
+        // or isAnimating) gives SwiftUI no reason to ever re-evaluate CollapsedPill's layout for
+        // the new edge, so the old orientation's own background stayed visible until some
+        // unrelated render happened to flush it through.
+        uiState.geometryVersion += 1
     }
 
     // MARK: - Expand / collapse
@@ -488,6 +494,11 @@ final class NotchPanel: NSPanel {
         let expandedSizeNow = Self.expandedSize(for: edge, geometry: next)
         offset = DockPlacement.clampedOffset(offset, collapsedSize: nextCollapsedSize, expandedSize: expandedSizeNow, edge: edge, visibleFrame: nextVisibleFrame)
         syncScreenEdgeMonitors()
+        // See NotchUIState.geometryVersion's own doc comment — a display/resolution/Dock change
+        // can change `edge` (a different display's own saved edge) or `geometry` (notch presence,
+        // capsule sizing) without necessarily changing isExpanded, which alone wouldn't give
+        // SwiftUI any reason to re-evaluate CollapsedPill/ExpandedCard for the new state.
+        uiState.geometryVersion += 1
         presentImmediately(expanded: uiState.isExpanded)
     }
 

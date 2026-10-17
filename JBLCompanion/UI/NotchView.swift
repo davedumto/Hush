@@ -59,6 +59,15 @@ final class NotchUIState {
     /// right then showed it alongside the still-shrinking card the entire time, not just once the
     /// card was actually gone.
     var isAnimating: Bool = false
+    /// Bumped by NotchPanel every time edge/offset/geometry/display changes outside of an
+    /// expand/collapse transition. `dockEdge()`/`isNotched()`/`collapsedSize()` are plain closures
+    /// over NotchPanel's own internal state, which isn't itself Observable, so without something
+    /// here for NotchView to read, SwiftUI has no reason to re-invoke them until some *unrelated*
+    /// state change (isExpanded, isAnimating, a Bluetooth update) happens to force a re-render.
+    /// That let a dock-edge change switch CollapsedPill's internal layout (HStack vs VStack, for
+    /// horizontal vs vertical docks) only once some other render happened to flush it through —
+    /// the old layout's own background stayed visible underneath/behind the new one until then.
+    var geometryVersion: Int = 0
 }
 
 /// Just the island's content — collapsed glyph+ring or the expanded card. The shape itself
@@ -112,6 +121,11 @@ struct NotchView: View {
     @Namespace private var photoFlight
 
     var body: some View {
+        // Establishes an Observation dependency on NotchPanel's own edge/geometry state, even
+        // though the value itself is never used below — see NotchUIState.geometryVersion's own
+        // doc comment for why this is necessary (dockEdge()/isNotched()/collapsedSize() alone
+        // give SwiftUI no reason to re-evaluate this body when only *they* change).
+        let _ = uiState.geometryVersion
         // The pill is always mounted, in its one stable, correct position — never conditionally
         // inserted/removed, never part of SwiftUI's `.transition()` system at all. Repeated real-
         // hardware testing showed the pill, specifically, rendering in the wrong place for a frame
