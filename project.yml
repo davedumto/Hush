@@ -22,14 +22,16 @@ targets:
     info:
       path: JBLCompanion/Info.plist
       properties:
-        # Both explicit, not left to PRODUCT_NAME's own default (the target name, "JBLCompanion",
-        # with no space) — that default is what the system Bluetooth permission prompt was
-        # actually quoting ("JBLCompanion" would like to use Bluetooth), not CFBundleDisplayName,
-        # even though that was already set. Set here as literal Info.plist values instead of
-        # renaming PRODUCT_NAME itself, which would also rename the built .app bundle/file paths.
         CFBundleName: Hush
         CFBundleDisplayName: Hush
         CFBundleIconName: AppIcon
+        # xcodegen writes this whole file fresh on every `generate` (its own default hardcodes
+        # literal "1.0"/"1" here, found while testing scripts/build_dmg.sh — a prior direct edit
+        # to the generated Info.plist got silently wiped on the next regenerate). These placeholders
+        # make the About-box/bundle version actually track MARKETING_VERSION/CURRENT_PROJECT_VERSION
+        # below, including a release build's MARKETING_VERSION= override.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSUIElement: true
         NSBluetoothAlwaysUsageDescription: "Hush connects to your headphones and lets you control your JBL headphones from the menu bar."
         # design/DESIGN_GUIDE.md §2: fonts live in JBLCompanion/Fonts, copied into
@@ -38,6 +40,17 @@ targets:
         ATSApplicationFontsPath: Fonts
     settings:
       base:
+        # The actual built .app bundle/file name — previously left at the target's own default
+        # ("JBLCompanion"), with only CFBundleDisplayName/CFBundleName set to "Hush" for the
+        # system Bluetooth prompt. That was fine while nothing left this Mac, but a DMG download
+        # should match the branding everywhere else (icon, dialogs, wordmark): Finder would
+        # otherwise show "JBLCompanion.app" in /Applications. No code references this literal
+        # name (verified), so renaming it is safe.
+        PRODUCT_NAME: Hush
+        # Decoupled from PRODUCT_NAME on purpose: PRODUCT_MODULE_NAME otherwise defaults to the
+        # product name too, which would rename the Swift module and break every test file's
+        # `@testable import JBLCompanion`. Only the user-facing app name changes.
+        PRODUCT_MODULE_NAME: JBLCompanion
         PRODUCT_BUNDLE_IDENTIFIER: com.davidejere.JBLCompanion
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
@@ -60,6 +73,13 @@ targets:
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "-"
         GENERATE_INFOPLIST_FILE: YES
+        # xcodegen's own default TEST_HOST is derived from the JBLCompanion *target's* name, not
+        # its PRODUCT_NAME override — still literally "JBLCompanion.app" after PRODUCT_NAME was
+        # set to Hush above, breaking `xcodebuild test` ("Could not find test host"). Xcode has no
+        # live cross-target reference for this (it's always a baked-in literal, even from the
+        # GUI), so this has to be updated by hand if PRODUCT_NAME ever changes again.
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Hush.app/Contents/MacOS/Hush"
+        BUNDLE_LOADER: "$(TEST_HOST)"
 schemes:
   JBLCompanion:
     build:

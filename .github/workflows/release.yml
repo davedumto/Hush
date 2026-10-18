@@ -1,0 +1,39 @@
+name: Release
+
+# Push a version tag (e.g. `git tag v0.1.1 && git push origin v0.1.1`) to build, test, and publish
+# a DMG as a GitHub Release. The tag is the single source of truth for the version — it overrides
+# project.yml's own MARKETING_VERSION at build time (scripts/build_dmg.sh's version argument), so
+# there's nothing else to keep in sync before tagging.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Run tests
+        run: |
+          xcodegen generate
+          xcodebuild -project JBLCompanion.xcodeproj -scheme JBLCompanion -destination 'platform=macOS' test
+
+      - name: Build DMG
+        run: scripts/build_dmg.sh "${GITHUB_REF_NAME#v}"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" "Hush-${VERSION}.dmg" \
+            --title "Hush $VERSION" \
+            --generate-notes
