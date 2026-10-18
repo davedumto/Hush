@@ -156,10 +156,28 @@ final class ClassicConnectionMonitor: NSObject {
     }
 
     @objc private nonisolated func handleDisconnectNotification(notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
+        // Real-world observation (2026-10-17): turning off Bluetooth entirely — rather than just
+        // powering off the headphones — tears down the device's several profiles (A2DP, HFP, HID,
+        // GATT, SerialPort, ...) close together but not atomically, and IOBluetooth redelivers
+        // this same disconnect notification once per underlying teardown event instead of once
+        // overall, fast enough that many redeliveries queue up before the first one's async Task
+        // even runs. A MainActor-side guard alone (checking `connectedDevice` once hopped over)
+        // wasn't enough — it only made each *processed* redelivery cheap, but creating a Task per
+        // redelivery was itself still enough volume to peg the main thread at 100% CPU for over a
+        // second, freezing the whole app (the tray couldn't even be clicked open). Unregistering
+        // `notification` synchronously, immediately, on whatever thread this fires on — before
+        // scheduling anything — stops it at the source instead: at most one redelivery can ever
+        // reach the Task below. IOBluetoothUserNotification.unregister() is safe to call more than
+        // once and off the main thread (this class's own doc comment already establishes these
+        // callbacks aren't guaranteed to arrive on the main thread at all).
+        notification.unregister()
         Task { @MainActor [weak self] in
             guard let self else { return }
+            // `attach(to:match:)` already guards the connect side the same way (`shouldSwitch`,
+            // for an analogous redundant-notification bug found 2026-10-16) — this mirrors it for
+            // disconnect, as a second line of defense alongside the synchronous unregister above.
+            guard self.connectedDevice != nil else { return }
             self.logger.info("Classic device disconnected via notification")
-            self.disconnectNotification?.unregister()
             self.disconnectNotification = nil
             self.connectedDevice = nil
             self.connectedProfileDisplayName = nil
