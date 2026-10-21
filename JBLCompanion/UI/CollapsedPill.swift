@@ -206,6 +206,53 @@ struct CollapsedPill: View {
     }
 }
 
+/// Not currently used anywhere — kept, not deleted, because it's very likely what the owner's
+/// actual corner-notch request (the expanded card's own cut-out tab, not the resting collapsed
+/// island) needs next. The SwiftUI-layer twin of `DockPlacement.quarterCirclePath` (that
+/// function's own doc comment has the full geometric reasoning): a separate implementation, not a
+/// bridge to the CoreGraphics one, because this draws in SwiftUI's own coordinate convention
+/// (origin top-left, y increasing *downward*), the opposite of the AppKit native silhouette's
+/// (origin bottom-left, y increasing upward) that function targets; porting the same angle
+/// arithmetic across that flip without rederiving it by hand is exactly the kind of place an
+/// off-by-quadrant bug hides.
+///
+/// `clockwise: false` sweeps `startAngle` toward `endAngle` by increasing raw angle — same,
+/// flip-independent meaning as the AppKit version's own `clockwise` parameter. If this ever
+/// renders as a concave sliver instead of a convex quarter-disc, that's the one value to flip.
+struct QuarterCircleShape: InsettableShape {
+    let corner: ScreenCorner
+    /// `InsettableShape`'s own inset amount — `.strokeBorder` needs this (not just plain `Shape`)
+    /// to draw its stroke fully inside the fill, same as `Circle`'s own built-in conformance
+    /// already gives the existing non-corner pill. Shrinks the radius only; the flush corner
+    /// itself (where the two straight edges meet) never moves, so the stroke still traces flush
+    /// against both edges, just pulled `insetAmount` inward from the outer curved edge.
+    var insetAmount: CGFloat = 0
+
+    func inset(by amount: CGFloat) -> QuarterCircleShape {
+        var copy = self
+        copy.insetAmount += amount
+        return copy
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let radius = min(rect.width, rect.height) - insetAmount
+        let flushCorner: CGPoint
+        let startAngle: Angle
+        switch corner {
+        case .topLeft: flushCorner = CGPoint(x: rect.minX, y: rect.minY); startAngle = .degrees(0)
+        case .topRight: flushCorner = CGPoint(x: rect.maxX, y: rect.minY); startAngle = .degrees(90)
+        case .bottomRight: flushCorner = CGPoint(x: rect.maxX, y: rect.maxY); startAngle = .degrees(180)
+        case .bottomLeft: flushCorner = CGPoint(x: rect.minX, y: rect.maxY); startAngle = .degrees(270)
+        }
+        let endAngle = startAngle + .degrees(90)
+        var path = Path()
+        path.move(to: flushCorner)
+        path.addArc(center: flushCorner, radius: radius, startAngle: startAngle, endAngle: endAngle, clockwise: false)
+        path.closeSubpath()
+        return path
+    }
+}
+
 // MARK: - Previews (design/DESIGN_GUIDE.md §3; design/reference/15-16, 17-pill-closeup-*)
 
 #Preview("770NC - Dark") {

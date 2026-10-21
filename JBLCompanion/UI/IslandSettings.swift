@@ -20,6 +20,19 @@ enum IslandSettings {
         /// and a vertical (left/right) one aren't the same number along the same axis, so one
         /// display switching edges must never apply the old edge's raw offset to the new one.
         static func dockOffset(forDisplayUUID uuid: String, edge: DockEdge) -> String { "islandDockOffset.\(uuid).\(edge.rawValue)" }
+        /// Whether the island is docked to an edge or freely placed, per display, same keying
+        /// reasoning as dockEdge above.
+        static func placementMode(forDisplayUUID uuid: String) -> String { "islandPlacementMode.\(uuid)" }
+        static func freePositionX(forDisplayUUID uuid: String) -> String { "islandFreePositionX.\(uuid)" }
+        static func freePositionY(forDisplayUUID uuid: String) -> String { "islandFreePositionY.\(uuid)" }
+        /// Which corner (if any) the island is fused into, per display — same keying reasoning as
+        /// `dockEdge`/`freePosition` above. Absent (not just an empty string) means "not corner-
+        /// docked," not "docked to some default corner."
+        static func dockedCorner(forDisplayUUID uuid: String) -> String { "islandDockedCorner.\(uuid)" }
+    }
+
+    enum PlacementMode: String {
+        case edge, free
     }
 
     /// The collapsed pill's own diameter — a circle, the same on every edge. 0 (UserDefaults'
@@ -85,5 +98,47 @@ enum IslandSettings {
 
     static func setDockOffset(_ offset: CGFloat, forDisplayUUID uuid: String, edge: DockEdge) {
         UserDefaults.standard.set(Double(offset), forKey: Key.dockOffset(forDisplayUUID: uuid, edge: edge))
+    }
+
+    /// `.edge` (the only mode reachable before dragging was freed from the edges) when nothing
+    /// has been saved yet for this display.
+    static func placementMode(forDisplayUUID uuid: String) -> PlacementMode {
+        guard let raw = UserDefaults.standard.string(forKey: Key.placementMode(forDisplayUUID: uuid)) else { return .edge }
+        return PlacementMode(rawValue: raw) ?? .edge
+    }
+
+    static func setPlacementMode(_ mode: PlacementMode, forDisplayUUID uuid: String) {
+        UserDefaults.standard.set(mode.rawValue, forKey: Key.placementMode(forDisplayUUID: uuid))
+    }
+
+    /// The island's own free-floating center point in screen coordinates, when
+    /// `placementMode(forDisplayUUID:) == .free`. nil when nothing has been saved yet (never
+    /// dragged off an edge on this display) — callers fall back to a sensible default (e.g. the
+    /// screen's center) rather than treating (0, 0) as a real saved position.
+    static func freePosition(forDisplayUUID uuid: String) -> CGPoint? {
+        let xKey = Key.freePositionX(forDisplayUUID: uuid)
+        let yKey = Key.freePositionY(forDisplayUUID: uuid)
+        guard UserDefaults.standard.object(forKey: xKey) != nil, UserDefaults.standard.object(forKey: yKey) != nil else { return nil }
+        return CGPoint(x: UserDefaults.standard.double(forKey: xKey), y: UserDefaults.standard.double(forKey: yKey))
+    }
+
+    static func setFreePosition(_ point: CGPoint, forDisplayUUID uuid: String) {
+        UserDefaults.standard.set(Double(point.x), forKey: Key.freePositionX(forDisplayUUID: uuid))
+        UserDefaults.standard.set(Double(point.y), forKey: Key.freePositionY(forDisplayUUID: uuid))
+    }
+
+    /// nil means "not corner-docked" — either never dragged into one on this display, or
+    /// explicitly cleared by docking to a plain edge or going free.
+    static func dockedCorner(forDisplayUUID uuid: String) -> ScreenCorner? {
+        guard let raw = UserDefaults.standard.string(forKey: Key.dockedCorner(forDisplayUUID: uuid)) else { return nil }
+        return ScreenCorner(rawValue: raw)
+    }
+
+    static func setDockedCorner(_ corner: ScreenCorner?, forDisplayUUID uuid: String) {
+        if let corner {
+            UserDefaults.standard.set(corner.rawValue, forKey: Key.dockedCorner(forDisplayUUID: uuid))
+        } else {
+            UserDefaults.standard.removeObject(forKey: Key.dockedCorner(forDisplayUUID: uuid))
+        }
     }
 }

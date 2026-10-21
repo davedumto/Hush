@@ -69,8 +69,11 @@ final class NotchUIState {
     /// the old layout's own background stayed visible underneath/behind the new one until then.
     var geometryVersion: Int = 0
     /// True only for the duration of an edge switch's internal collapse-move-expand cycle
-    /// (NotchPanel.setDockEdge's `.collapseFirst` case, design/DESIGN_GUIDE.md §6: "collapse
-    /// first, move the pill, then expand from the new edge"). That rule is about the *card's*
+    /// (`DockPlacement.edgeChangeOrdering`'s `.collapseFirst` case — currently unreachable: the
+    /// only way to change edges is dragging, and dragging is only ever allowed while already
+    /// collapsed, so there's never a card to collapse first; kept in case a future non-drag way
+    /// to switch edges while expanded gets added. design/DESIGN_GUIDE.md §6: "collapse first,
+    /// move the pill, then expand from the new edge"). That rule is about the *card's*
     /// own shape motion (and is still followed below, unaffected by this flag) — not the hero
     /// photo's own fly-to-the-pill flight (§9.1 point 5), which owner feedback flagged as
     /// reading like a glitch here: the photo starts trailing toward the pill, then the pill
@@ -88,6 +91,9 @@ final class NotchUIState {
     /// it twice in a row (the window already open, re-clicking the menu item) still fires the
     /// `.onChange` both times instead of only the first.
     var islandSettingsRequestToken: Int = 0
+    /// Bumped by NotchPanel.requestOpenFeedback() — same pattern and same reason as
+    /// islandSettingsRequestToken above.
+    var feedbackRequestToken: Int = 0
 }
 
 /// Just the island's content — collapsed glyph+ring or the expanded card. The shape itself
@@ -119,6 +125,16 @@ struct NotchView: View {
     /// closure, same reasoning as `isNotched`: NotchPanel builds this NotchView once, but the
     /// edge can change later (drag, Island Settings, a screen change).
     let dockEdge: () -> DockEdge
+    /// Non-nil only when docked flush into a screen corner (NotchPanel.dockedCorner's own doc
+    /// comment) — a closure, same reasoning as `dockEdge`/`isNotched`. Drives `ExpandedCard`'s own
+    /// corner-tab placement.
+    let dockedCorner: () -> ScreenCorner?
+    /// Free-floating only — which edge of the card the cut-out notch sits on, how far along it,
+    /// and where that same position falls as a 0...1 `UnitPoint` (NotchPanel.freeFloatingNotch()'s
+    /// own doc comment), so both the notch itself and the open/close animation's own anchor stay
+    /// aligned with the island instead of centered on whichever edge the card happens to render
+    /// flush against. `nil` for every other placement mode.
+    let freeFloatingNotch: () -> (dock: CardDock, offset: CGFloat, anchor: UnitPoint)?
     /// The expanded card's cut-out tab collapses the card when tapped (design/DESIGN_GUIDE.md §4)
     /// — a closure, like the other NotchPanel-owned behaviors, since collapsing is a real window/
     /// silhouette transition NotchPanel owns, not something NotchView can trigger by itself.
@@ -186,6 +202,11 @@ struct NotchView: View {
             NSApplication.shared.activate(ignoringOtherApps: true)
             openWindow(id: IslandSettingsView.windowID)
         }
+        .onChange(of: uiState.feedbackRequestToken) { _, newValue in
+            guard newValue > 0 else { return }
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            openWindow(id: FeedbackView.windowID)
+        }
     }
 
     /// On expand, hide immediately — `isExpanded` flipping to true is reason enough on its own.
@@ -208,8 +229,31 @@ struct NotchView: View {
     private var cardTransition: AnyTransition {
         guard !reduceMotion else { return .opacity }
         return AnyTransition
-            .scale(scale: MotionConstants.cardTransitionScale, anchor: dockEdge().edgeUnitPoint)
+            .scale(scale: MotionConstants.cardTransitionScale, anchor: cardTransitionAnchor)
             .combined(with: .opacity)
+    }
+
+    /// `dockEdge().edgeUnitPoint` on its own (`.top`/`.bottom` — always horizontally *centered*,
+    /// `(0.5, 0)`/`(0.5, 1)`) is right for a plain, centered edge dock, but wrong for a corner one:
+    /// the window itself grows from a *fixed corner point* (NotchPanel.windowFrame(for:)'s own doc
+    /// comment on why), not a centered edge, so a centered scale anchor fights that — the card
+    /// visibly grows symmetrically left/right from the middle while the window around it is
+    /// actually anchored off to one side, reading as "growing from the top" (centered, ordinary)
+    /// even when docked at a corner, or as growing the wrong direction entirely. Biasing the
+    /// anchor to the real corner (its own top-left/top-right/bottom-left/bottom-right UnitPoint)
+    /// instead makes the animation agree with where the window is actually anchored.
+    private var cardTransitionAnchor: UnitPoint {
+        // Owner spec, step 3: a free-floating tray's own animation originates from the island's
+        // actual position — checked first, since `isFreePositioned` and `dockedCorner` are
+        // mutually exclusive placement modes (NotchPanel.dockedCorner's own doc comment).
+        if let notch = freeFloatingNotch() { return notch.anchor }
+        guard let corner = dockedCorner() else { return dockEdge().edgeUnitPoint }
+        switch corner {
+        case .topLeft: return .topLeading
+        case .topRight: return .topTrailing
+        case .bottomLeft: return .bottomLeading
+        case .bottomRight: return .bottomTrailing
+        }
     }
 
     @ViewBuilder
@@ -265,7 +309,9 @@ struct NotchView: View {
     @ViewBuilder
     private var expandedContent: some View {
         ExpandedCard(
-            state: state, dock: dockEdge().cardDock, onCollapseTapped: onCollapseTabTapped, isModeVerified: isModeVerified,
+            state: state, dock: dockEdge().cardDock, dockedCorner: dockedCorner(), freeFloatingNotch: freeFloatingNotch(),
+            onCollapseTapped: onCollapseTabTapped,
+            isModeVerified: isModeVerified,
             supportsNoiseControl: supportsNoiseControl(), onSelectNoiseMode: onSelectNoiseMode,
             onReconnectTapped: onReconnectTapped, onOpenBluetoothSettingsTapped: onOpenBluetoothSettingsTapped,
             lastMatchedProfileDisplayName: lastMatchedProfileDisplayName(), photoNamespace: cardPhotoNamespace

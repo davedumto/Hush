@@ -15,17 +15,24 @@ final class NotchSilhouetteView: NSView {
 
     var onTap: (() -> Void)?
     var onHoverChange: ((Bool) -> Void)?
-    /// design/DESIGN_GUIDE.md §6: "the pill can be dragged along its edge only" — reports the
-    /// incremental delta (not cumulative from the original mouseDown) along whichever axis
-    /// `dockEdge` implies, so the panel can just add it straight onto its current offset. Only
-    /// fires once the move exceeds DockPlacement.dragThreshold ("a click that moves less than a
-    /// few points is a click, not a drag") — before that, this stays silent and `onTap` still
-    /// fires normally on mouseUp.
-    var onDrag: ((CGFloat) -> Void)?
-    /// Which axis `onDrag` reports deltas along — set by the caller whenever the dock edge
-    /// changes. Defaults to `.top` (horizontal), matching this view's original top-only behavior.
+    /// Whether a drag is currently allowed at all (the panel says no while expanded) — checked
+    /// once a real drag is detected, before the manual tracking below takes over.
+    var canDrag: (() -> Bool)?
+    /// Called on every drag tick with the window's own next *envelope* origin, computed from the
+    /// raw mouse delta — before this view applies it. Returns the origin to actually use, letting
+    /// the panel clamp live against the real screen boundary (not just once at drop time) — see
+    /// `mouseDragged`'s own doc comment for why this has to happen here, not via
+    /// `performDrag`/`NSWindow.didMoveNotification`.
+    var clampOrigin: ((CGPoint) -> CGPoint)?
+    /// Fires once, right after a real drag (not a plain tap) finishes — the window has already
+    /// been moved to its final position by the time this fires; the panel's cue to decide whether
+    /// the drag ended close enough to a screen edge to dock there, or far enough away to settle
+    /// into free placement.
+    var onDragEnd: (() -> Void)?
+    /// Only used for the shape's own flush-to-edge rendering (`resize(...)`'s `symmetric: false`
+    /// branch). Set by the caller whenever the dock edge changes. Defaults to `.top`, matching
+    /// this view's original top-only behavior.
     var dockEdge: DockEdge = .top
-    private var dragAnchor: CGPoint?
     private var didDrag = false
 
     override init(frame frameRect: NSRect) {
@@ -82,38 +89,87 @@ final class NotchSilhouetteView: NSView {
         CATransaction.commit()
     }
 
+    // Tracked by hand, inside a synchronous `window.nextEvent(...)` loop, rather than relying on
+    // the normal asynchronous mouseDragged/mouseUp responder dispatch, and rather than handing the
+    // gesture off to `window.performDrag(with:)`.
+    //
+    // `performDrag` was tried first and rejected: it hands the whole gesture to AppKit's own
+    // drag loop, which gives no hook to intervene while it's running, so a free-floating drop near
+    // a screen edge visibly jumped once it finished (the only place left to correct it was after
+    // the fact).
+    //
+    // The normal per-event `mouseDragged`/`mouseUp` override approach was tried next and also
+    // rejected: a real `log stream` capture (free-drag investigation) showed `mouseDragged` ticks
+    // arriving steadily, then going silent mid-gesture — no further ticks and no `mouseUp` at all
+    // — away from any screen edge or clamp, i.e. AppKit itself dropped the rest of the gesture's
+    // dispatch. This is a known failure mode for a window that
+    // can never become key (`NotchPanel.canBecomeKey == false`, deliberate — the panel must never
+    // steal focus): normal event dispatch for such a window isn't guaranteed to keep delivering a
+    // fast-moving drag all the way to its `mouseUp`.
+    //
+    // Running a tight, synchronous `nextEvent(matching:until:inMode:dequeue:)` loop inside
+    // `mouseDown` — the standard AppKit idiom for dragging a non-activating utility window/status
+    // item (used by menu-bar extras generally) — sidesteps that: it dequeues drag/up events
+    // directly from the event queue in `.eventTracking` run-loop mode instead of waiting for the
+    // normal asynchronous responder-chain dispatch that was silently dying here, so there is
+    // nothing left in the delivery path for a fast motion to fall out of.
     override func mouseDown(with event: NSEvent) {
         pressedInside = true
-        dragAnchor = event.locationInWindow
+        guard let window else { return }
+        // Global screen coordinates, not `event.locationInWindow` — the window itself moves on
+        // every drag tick below, which would shift locationInWindow's own coordinate space out
+        // from under the cursor mid-drag and compound into a small feedback error each tick (the
+        // window chasing a reference point that itself keeps moving). NSEvent.mouseLocation is
+        // screen-space and unaffected by this view's own window moving.
+        let anchor = NSEvent.mouseLocation
+        var anchorWindowOrigin: CGPoint?
         didDrag = false
-    }
 
-    override func mouseDragged(with event: NSEvent) {
-        // A press that moves without leaving the shape does not cancel the click; only leaving it does.
-        let point = convert(event.locationInWindow, from: nil)
-        pressedInside = shapeLayer.path?.contains(point) ?? false
+        trackingLoop: while true {
+            guard let next = window.nextEvent(
+                matching: [.leftMouseDragged, .leftMouseUp], until: .distantFuture,
+                inMode: .eventTracking, dequeue: true
+            ) else { break }
 
-        guard let anchor = dragAnchor else { return }
-        let current = event.locationInWindow
-        if !didDrag {
-            guard DockPlacement.isDrag(from: anchor, to: current) else { return }
-            didDrag = true
+            switch next.type {
+            case .leftMouseDragged:
+                // A press that moves without leaving the shape does not cancel the click; only
+                // leaving it does.
+                let point = convert(next.locationInWindow, from: nil)
+                pressedInside = shapeLayer.path?.contains(point) ?? false
+                let current = NSEvent.mouseLocation
+
+                if !didDrag {
+                    guard DockPlacement.isDrag(from: anchor, to: current) else { continue trackingLoop }
+                    guard canDrag?() ?? true else { continue trackingLoop }
+                    didDrag = true
+                    anchorWindowOrigin = window.frame.origin
+                }
+
+                guard let anchorOrigin = anchorWindowOrigin else { continue trackingLoop }
+                let rawOrigin = CGPoint(
+                    x: anchorOrigin.x + (current.x - anchor.x), y: anchorOrigin.y + (current.y - anchor.y)
+                )
+                let finalOrigin = clampOrigin?(rawOrigin) ?? rawOrigin
+                window.setFrameOrigin(finalOrigin)
+                pressedInside = false
+
+            case .leftMouseUp:
+                let wasPressed = pressedInside
+                pressedInside = false
+                if didDrag {
+                    didDrag = false
+                    onDragEnd?()
+                } else if wasPressed {
+                    let point = convert(next.locationInWindow, from: nil)
+                    if shapeLayer.path?.contains(point) ?? false { onTap?() }
+                }
+                break trackingLoop
+
+            default:
+                break
+            }
         }
-        let delta = dockEdge.isVertical ? (current.y - anchor.y) : (current.x - anchor.x)
-        dragAnchor = current
-        onDrag?(delta)
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        let wasPressed = pressedInside
-        pressedInside = false
-        dragAnchor = nil
-        // A drag is never a click, even if the cursor ends up back inside the shape.
-        guard !didDrag else { didDrag = false; return }
-        guard wasPressed else { return }
-        let point = convert(event.locationInWindow, from: nil)
-        guard shapeLayer.path?.contains(point) ?? false else { return }
-        onTap?()
     }
 
     /// Resizes the shape from `start` to `target` within a window already sized to

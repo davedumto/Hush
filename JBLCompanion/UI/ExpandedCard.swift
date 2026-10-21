@@ -14,6 +14,18 @@ import SwiftUI
 struct ExpandedCard: View {
     let state: HeadphoneState
     let dock: CardDock
+    /// Non-nil only when docked flush into a screen corner (NotchPanel.dockedCorner's own doc
+    /// comment) — shifts the tab (below) from the edge's own middle toward that corner instead,
+    /// so it visually sits exactly where the collapsed island was, giving the illusion that
+    /// opening/closing the tray never moves it (owner request).
+    var dockedCorner: ScreenCorner? = nil
+    /// Free-floating only (NotchPanel.freeFloatingNotch()'s own doc comment) — which edge of the
+    /// card the cut-out notch sits on and how far along it, so it stays aligned with the island
+    /// instead of centered on `dock`'s own edge (which, for a free-floating card, isn't a real
+    /// screen edge the card is flush against at all — owner spec, 2026-10-21: the tray opens
+    /// adjacent to the island in whichever direction its grid region names). `nil` for every
+    /// other placement mode, which keep the plain, centered `CutoutTabShape` untouched.
+    var freeFloatingNotch: (dock: CardDock, offset: CGFloat, anchor: UnitPoint)? = nil
     let onCollapseTapped: () -> Void
     /// Per-mode "is this command frame hardware-verified" check (DeviceProfile.isModeVerified).
     let isModeVerified: (CommandableNoiseMode) -> Bool
@@ -50,7 +62,6 @@ struct ExpandedCard: View {
     }
     private var heroHeight: CGFloat { isVertical ? 196 : 236 }
     private var photoHeight: CGFloat { isVertical ? 158 : 192 }
-    private var tabLengthAlongEdge: CGFloat { isVertical ? 92 : 116 }
     // Floored at CutoutTabShape's outerCornerRadius (18): canonicalTopPath's straight wall
     // segment length is depthIntoPanel - outerCornerRadius, so going lower makes that segment
     // negative and breaks the fillet/corner geometry (the "overlapping circles" bug from before).
@@ -113,6 +124,7 @@ struct ExpandedCard: View {
     private var panelContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             topRow
+                .padding(cornerTabTopRowClearance)
                 .modifier(StaggerIn(block: .topRow))
             heroSection
                 .modifier(StaggerIn(block: .hero))
@@ -124,6 +136,7 @@ struct ExpandedCard: View {
                 .modifier(StaggerIn(block: .controls))
             footer
                 .padding(.top, 12)
+                .padding(cornerTabFooterClearance)
         }
         .padding(panelPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -147,6 +160,33 @@ struct ExpandedCard: View {
         }
     }
 
+    /// Extra inset on just the footer row — the one closest to a *bottom*-corner tab (`cornerTab`,
+    /// which sits off to one side near the actual corner, not centered the way the normal tab is)
+    /// — clearing only the specific content it would otherwise overlap, rather than padding the
+    /// whole panel (which visibly shrank/distorted the rest of the card's own layout for no
+    /// reason, since nothing else in it actually sits near that corner).
+    private var cornerTabFooterClearance: EdgeInsets {
+        guard dock == .bottom else { return EdgeInsets() }
+        return cornerTabRowClearance
+    }
+
+    /// `cornerTabFooterClearance`'s own counterpart for the top row, for a *top*-corner tab.
+    private var cornerTabTopRowClearance: EdgeInsets {
+        guard dock == .top else { return EdgeInsets() }
+        return cornerTabRowClearance
+    }
+
+    private var cornerTabRowClearance: EdgeInsets {
+        // Clears the corner tab's own diameter (DockPlacement.collapsedPillDiameter, 52) plus its
+        // inset from the edge (cornerTabPosition's own `alongEdgeInset`) with a little to spare.
+        let clearance: CGFloat = 50
+        switch dockedCorner {
+        case .topLeft, .bottomLeft: return EdgeInsets(top: 0, leading: clearance, bottom: 0, trailing: 0)
+        case .topRight, .bottomRight: return EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: clearance)
+        case nil: return EdgeInsets()
+        }
+    }
+
     /// §4 "Panel fill": radial gradient, centre x50% y28%, stops PanelHighlight 0 / PanelBase
     /// 0.56 / PanelEdge 1, end radius about the card height.
     private var panelGradient: RadialGradient {
@@ -165,19 +205,83 @@ struct ExpandedCard: View {
 
     @ViewBuilder
     private var tab: some View {
-        let shape = CutoutTabShape(dock: dock, lengthAlongEdge: tabLengthAlongEdge, depthIntoPanel: tabDepthIntoPanel)
-        shape
+        if dockedCorner != nil {
+            cornerTab
+        } else {
+            // A free-floating notch can land on any of the 4 card edges regardless of the card's
+            // own base shape (`dock`/`isVertical`, which for free-floating always stays whichever
+            // orientation `effectiveEdgeForGeometry` picked — NotchPanel's own doc comment) — e.g.
+            // a landscape card can still have its notch on a `.left`/`.right` edge. `lengthAlongEdge`
+            // has to match *that* edge's own orientation, not the card's.
+            let tabDock = freeFloatingNotch?.dock ?? dock
+            let tabOffset = freeFloatingNotch?.offset ?? 0
+            let length: CGFloat = tabDock.isVertical ? 92 : 116
+            let shape = CutoutTabShape(dock: tabDock, lengthAlongEdge: length, depthIntoPanel: tabDepthIntoPanel, offset: tabOffset)
+            // `.overlay(alignment:)` below positions its content relative to the *whole card*,
+            // with no idea the shape itself just slid by `tabOffset` (`CutoutTabShape.offset`'s
+            // own doc comment) — for `tabOffset == 0` (every docked case, always) that's
+            // invisible, since the shape's own centered position and the card's own center
+            // coincide anyway. The moment the notch actually slides, the icon stayed put while the
+            // shape slid out from under it — a real regression, caught on a live screenshot
+            // (regions 1/3/7/9, where the notch offset is largest). Shifting the overlay content
+            // by that same `tabOffset`, on the same axis the shape itself moved along, is what
+            // keeps the icon riding along with the shape instead of staying fixed to the card.
+            let contentOffset: CGSize = tabDock.isVertical ? CGSize(width: 0, height: tabOffset) : CGSize(width: tabOffset, height: 0)
+            shape
+                .fill(Theme.Semantic.cardFrame)
+                .overlay(alignment: ExpandedCard.tabContentAlignment(for: tabDock)) {
+                    tabContent
+                        .padding(ExpandedCard.tabContentPadding(for: tabDock))
+                        .offset(contentOffset)
+                }
+                .frame(width: cardSize.width, height: cardSize.height)
+                .contentShape(shape)
+                .onTapGesture { onCollapseTapped() }
+        }
+    }
+
+    /// The corner-docked tab: a plain circle — the same silhouette the collapsed island itself
+    /// always has (CollapsedPill's own doc comment) — sitting flush against the card's docked
+    /// edge, slid along it toward `dockedCorner`, rather than `CutoutTabShape`'s elongated,
+    /// filleted rectangle. Owner request: "circular looking notch," matching the collapsed
+    /// island's own look so the tray reads as a direct continuation of it, not a different shape.
+    @ViewBuilder
+    private var cornerTab: some View {
+        let diameter = DockPlacement.collapsedPillDiameter
+        Circle()
             .fill(Theme.Semantic.cardFrame)
-            .overlay(alignment: tabContentAlignment) {
-                tabContent
-                    .padding(tabContentPadding)
-            }
+            .frame(width: diameter, height: diameter)
+            .overlay { markGlyph(size: 20, color: colorScheme == .dark ? Color.white : Theme.Brand.navy) }
+            .contentShape(Circle())
+            .position(cornerTabPosition)
             .frame(width: cardSize.width, height: cardSize.height)
-            .contentShape(shape)
             .onTapGesture { onCollapseTapped() }
     }
 
-    private var tabContentAlignment: Alignment {
+    /// Touching the card's own docked edge (`dock` — already resolved to the correct top/bottom
+    /// half for every corner, not just the bottom two — NotchPanel.effectiveEdgeForGeometry's own
+    /// doc comment) from the *inside* — flush against it, but never crossing it (owner: "nothing
+    /// should leave the tray" — straddling the edge, half poking outside the card, was wrong).
+    /// Slid along that edge toward `dockedCorner`, not jammed into the literal corner point itself
+    /// — matching the owner's own reference image, which shows the notch sitting at the edge near
+    /// the corner, not exactly on it.
+    private var cornerTabPosition: CGPoint {
+        let diameter = DockPlacement.collapsedPillDiameter
+        let y: CGFloat = dock == .top ? diameter / 2 : cardSize.height - diameter / 2
+        let alongEdgeInset = diameter / 2 + 4
+        let x: CGFloat
+        switch dockedCorner {
+        case .topLeft, .bottomLeft: x = alongEdgeInset
+        case .topRight, .bottomRight: x = cardSize.width - alongEdgeInset
+        case nil: x = cardSize.width / 2
+        }
+        return CGPoint(x: x, y: y)
+    }
+
+    /// Static, parameterized by `dock` rather than reading the instance's own `dock` property
+    /// directly — `tab`'s own doc comment on why: a free-floating card's notch edge can differ
+    /// from the card's base `dock`, so both call sites have to be able to ask for *either* one.
+    private static func tabContentAlignment(for dock: CardDock) -> Alignment {
         switch dock {
         case .top: return .top
         case .bottom: return .bottom
@@ -186,7 +290,7 @@ struct ExpandedCard: View {
         }
     }
 
-    private var tabContentPadding: EdgeInsets {
+    private static func tabContentPadding(for dock: CardDock) -> EdgeInsets {
         // Centers the mark (+wordmark) within the tab's own (shallow) depth — a modest fixed
         // inset reads correctly without per-dock measurement.
         switch dock {
@@ -197,21 +301,11 @@ struct ExpandedCard: View {
         }
     }
 
-    @ViewBuilder
+    // Just the mark, on every dock — owner request: no "hush." wordmark on the tab at all anymore
+    // (top/bottom used to show it alongside the mark; §4's own "HushMark 20 only" was already the
+    // rule for side docks, now applied uniformly instead of only there).
     private var tabContent: some View {
-        let markColor = colorScheme == .dark ? Color.white : Theme.Brand.navy
-        if isVertical {
-            // §4: "Content | HushMark 20 only" on side docks.
-            markGlyph(size: 20, color: markColor)
-        } else {
-            HStack(spacing: 6) {
-                markGlyph(size: 18, color: markColor)
-                Text("hush")
-                    .font(Theme.Fonts.tabWordmark)
-                    .foregroundStyle(markColor)
-                + Text(".").foregroundStyle(Theme.Brand.orange).font(Theme.Fonts.tabWordmark)
-            }
-        }
+        markGlyph(size: 20, color: colorScheme == .dark ? Color.white : Theme.Brand.navy)
     }
 
     /// HushArchTemplate (tintable) + a hand-drawn orange dot, same technique CollapsedPill uses —
@@ -611,9 +705,9 @@ struct ExpandedCard: View {
                     .foregroundStyle(Theme.Semantic.textPrimary)
                 HStack(spacing: 7) {
                     Circle()
-                        .fill(Theme.Brand.orange)
+                        .fill(Color.green)
                         .frame(width: 7, height: 7)
-                        .shadow(color: Theme.Brand.orange.opacity(0.85), radius: 4)
+                        .shadow(color: Color.green.opacity(0.85), radius: 4)
                     Text(content.subtitleText)
                         .font(Theme.Fonts.subText)
                         .foregroundStyle(Theme.Semantic.textSecondary)

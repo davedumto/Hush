@@ -15,6 +15,13 @@ struct CutoutTabShape: Shape {
     let depthIntoPanel: CGFloat
     var outerCornerRadius: CGFloat = 18
     var filletRadius: CGFloat = 16
+    /// Shifts the tab along the edge from its own built-in centered placement — same sign
+    /// convention `DockPlacement.frame(for:edge:offset:...)` already uses elsewhere (positive =
+    /// right for `.top`/`.bottom`, down for `.left`/`.right`). `0` (the default) is the original,
+    /// always-centered placement, unchanged — only a free-floating tray's own notch
+    /// (`DockPlacement.notchOffset(...)`, owner spec 2026-10-21) ever passes anything else; a
+    /// docked card's tab still always centers on its edge.
+    var offset: CGFloat = 0
 
     func path(in rect: CGRect) -> Path {
         Self.canonicalTopPath(
@@ -27,11 +34,11 @@ struct CutoutTabShape: Shape {
     private func placementTransform(in rect: CGRect) -> CGAffineTransform {
         switch dock {
         case .top:
-            return CGAffineTransform(translationX: rect.midX, y: rect.minY)
+            return CGAffineTransform(translationX: rect.midX + offset, y: rect.minY)
         case .bottom:
             // Flip vertically (tab points up into the panel) and anchor to the bottom edge.
             return CGAffineTransform(scaleX: 1, y: -1)
-                .concatenating(CGAffineTransform(translationX: rect.midX, y: rect.maxY))
+                .concatenating(CGAffineTransform(translationX: rect.midX + offset, y: rect.maxY))
         case .left:
             // Rotate so "along edge" runs vertically and "depth" runs rightward (inward) from the
             // left edge. +π/2 was the wrong direction: canonical local (x, y) with y = depth
@@ -42,11 +49,11 @@ struct CutoutTabShape: Shape {
             // (y, -x) looks like a one-sign difference on paper, but it's the entire tab's
             // visibility: outside the card's own bounds (invisible) vs. inside it (correct).
             return CGAffineTransform(rotationAngle: -.pi / 2)
-                .concatenating(CGAffineTransform(translationX: rect.minX, y: rect.midY))
+                .concatenating(CGAffineTransform(translationX: rect.minX, y: rect.midY + offset))
         case .right:
             return CGAffineTransform(rotationAngle: -.pi / 2)
                 .concatenating(CGAffineTransform(scaleX: -1, y: 1))
-                .concatenating(CGAffineTransform(translationX: rect.maxX, y: rect.midY))
+                .concatenating(CGAffineTransform(translationX: rect.maxX, y: rect.midY + offset))
         }
     }
 

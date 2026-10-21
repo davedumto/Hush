@@ -39,8 +39,15 @@ final class NotchPanel: NSPanel {
     static let overlayCollectionBehavior: NSWindow.CollectionBehavior = [
         .canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle
     ]
-    /// Above the menu bar's own status items, below native menus.
-    static let normalLevel = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
+    /// Was `statusBar + 1` (above the menu bar's own status items, below native menus) — raised to
+    /// `.popUpMenu` as a real, researched experiment for the Space-switch/app-switch blink the
+    /// owner reported (a documented pattern for notch-style overlay panels, not a guess): the
+    /// WindowServer may composite a window at this level differently across these transitions.
+    /// Known tradeoff, explicitly accepted by the owner (2026-10-21): `.popUpMenu` sits *above*
+    /// native menus, where `statusBar + 1` sat below them — the island can now render on top of a
+    /// real dropdown/File/Edit menu if they happen to overlap, which couldn't happen before. If
+    /// that reads as worse than the blink it was meant to fix, revert to `statusBar.rawValue + 1`.
+    static let normalLevel = NSWindow.Level.popUpMenu
 
     private let logger = Logger(subsystem: "com.davidejere.JBLCompanion", category: "NotchPanel")
 
@@ -66,6 +73,69 @@ final class NotchPanel: NSPanel {
     /// Points from the middle of `edge`, already clamped — design/DESIGN_GUIDE.md §6: "centred
     /// along its edge unless dragged."
     private var offset: CGFloat
+    /// Whether the island is currently docked to `edge` or freely placed at `freeCenter`. Set by
+    /// `handleDragEnd()` depending on how far the drag ended from the nearest screen edge —
+    /// dragging is the only way to change this now; Island Settings no longer has its own edge
+    /// picker (removed: it could only ever reach a subset of what dragging already covers, and
+    /// showed a "distance from edge" number that meant nothing while free-floating).
+    private var isFreePositioned: Bool
+    /// The island's own logical center point (screen coordinates) while `isFreePositioned` —
+    /// both the collapsed pill and the expanded card are centered on this same point, so the
+    /// card grows outward around wherever the pill was dropped rather than flush against an edge.
+    private var freeCenter: CGPoint
+    /// Non-nil when docked flush into a screen corner rather than a plain `edge` — a distinct
+    /// third placement mode (free / edge / corner), set by `handleDragEnd()` when a drop lands
+    /// close enough to where two edges meet, or restored from `IslandSettings` here/in
+    /// `reposition()`. Takes priority over `edge` everywhere it matters (`windowFrame(for:)`,
+    /// the collapsed silhouette/content) whenever it's non-nil; `dockToEdge`/`settleFreePositioned`
+    /// clear it back to nil the moment the island docks to a plain edge or goes free again.
+    private var dockedCorner: ScreenCorner?
+    /// How close a drag has to end to a screen edge (measured from the pill's own facing side) to
+    /// dock there instead of settling into free placement. Deliberately tight — a docked pill
+    /// always sits exactly `IslandSettings.edgeMargin(for:)` (a fixed constant, default 20) from
+    /// its edge, never wherever it was actually dropped on that axis; a loose capture zone here
+    /// (56 was tried first) meant almost any drop anywhere near the top or bottom snapped into
+    /// that fixed distance, making it impossible to leave the island sitting somewhere of your own
+    /// choosing near an edge — it kept visibly jumping back to the same fixed spot instead of
+    /// staying put. 12 only catches a drop that's essentially flush against the edge already (a
+    /// deliberate "dock it" gesture), leaving every other drop, including ones quite close to an
+    /// edge, exactly where it was released.
+    private static let edgeSnapDistance: CGFloat = 12
+    /// Corner docking's own, more generous capture zone — deliberately much looser than
+    /// `edgeSnapDistance`. A single-edge catch only ever has to measure one axis close to 0; a
+    /// corner catch (`DockPlacement.nearestCorner`) needs *both* axes close to 0 at the same
+    /// instant, which is a much harder target to hit by hand at `edgeSnapDistance`'s own tight
+    /// 12pt — real-world drags kept landing just outside it on one axis or the other and silently
+    /// falling through to a plain single-edge dock instead, even when the drop clearly looked
+    /// "in the corner."
+    private static let cornerSnapDistance: CGFloat = 48
+    /// `collapsedSize(for:geometry:)`/`collapsedGap(edge:geometry:)` both special-case `.top` for
+    /// real camera-notch fusion — free placement never fuses with the notch even when dropped
+    /// near the top, so call sites pass this instead of the real `edge` whenever
+    /// `isFreePositioned` is true. `.bottom` reads oddly here only in isolation; every call site
+    /// that uses it ignores `edge` entirely once it isn't `.top` (both functions' own doc
+    /// comments), so this is just "any non-top edge," not a claim about which edge it's near.
+    ///
+    /// Corner docking maps to `.top`/`.bottom` matching the corner's own vertical half (never
+    /// `.left`/`.right` — a corner dock's card is always the landscape, 374-wide shape, same as a
+    /// plain top/bottom dock) — this still never risks real camera-notch fusion even for a
+    /// `topLeft`/`topRight` corner on a notched display: `collapsedSize(for:geometry:)` only
+    /// fuses when `geometry.isNotched` is *also* true, and `collapsedGap(edge:geometry:)` reuses
+    /// `IslandGeometry.floatingGap`, which already resolves to the same plain floating value on a
+    /// non-notched display regardless (`isNotched` — the separate, rendering-facing property —
+    /// still independently excludes corner docks from ever rendering flush-fused, on a notched
+    /// display or not). Getting this right (not just defaulting everything to `.bottom`) is what
+    /// lets ExpandedCard's own `dock`/`CardDock` — threaded straight through from this same
+    /// property — orient its cut-out tab to the correct edge of the card for *every* corner, not
+    /// just the two bottom ones.
+    private var effectiveEdgeForGeometry: DockEdge {
+        if isFreePositioned { return .bottom }
+        switch dockedCorner {
+        case .topLeft, .topRight: return .top
+        case .bottomLeft, .bottomRight: return .bottom
+        case nil: return edge
+        }
+    }
 
     private var currentSize: CGSize
     /// Bumped on every present() call; a stale completion whose generation no longer matches is
@@ -107,6 +177,27 @@ final class NotchPanel: NSPanel {
             : CGSize(width: contentSize.width + shadowMargin * 2, height: contentSize.height + shadowMargin)
     }
 
+    /// `restingEnvelopeSize(for:edge:symmetric:)`'s corner-dock counterpart: both axes are flush
+    /// against a screen edge at a corner (never "centered along an edge" the way a single-edge
+    /// dock's perpendicular axis is), so neither axis ever gets *double* margin the way that
+    /// function's non-symmetric branch does — just single margin on the one far side of each axis,
+    /// or margin on all four sides (both axes' near *and* far side) for the collapsed quarter-disc's
+    /// own hover-scale growth room, same `symmetric` reasoning as the plain-edge pill.
+    private static func cornerEnvelopeSize(for contentSize: CGSize, symmetric: Bool) -> CGSize {
+        symmetric
+            ? CGSize(width: contentSize.width + shadowMargin * 2, height: contentSize.height + shadowMargin * 2)
+            : CGSize(width: contentSize.width + shadowMargin, height: contentSize.height + shadowMargin)
+    }
+
+    /// Routes to `cornerEnvelopeSize(for:symmetric:)` when corner-docked, `restingEnvelopeSize(for:
+    /// edge:symmetric:)` otherwise — the one place every envelope-size call site needs to branch,
+    /// so none of them have to know about corner docking individually.
+    private func envelopeSize(for contentSize: CGSize, symmetric: Bool) -> CGSize {
+        dockedCorner != nil
+            ? Self.cornerEnvelopeSize(for: contentSize, symmetric: symmetric)
+            : Self.restingEnvelopeSize(for: contentSize, edge: edge, symmetric: symmetric)
+    }
+
     /// ExpandedCard's own fixed size (design/DESIGN_GUIDE.md §4/§10) — a real constant, not a
     /// measurement, and must stay in lockstep with ExpandedCard.cardSize (same reasoning there for
     /// why 500, not a flat 470 — the guide's own "about 470" already allows it, and content
@@ -144,7 +235,12 @@ final class NotchPanel: NSPanel {
         let resolvedEdge = uuid.map { IslandSettings.dockEdge(forDisplayUUID: $0) } ?? .top
         self.edge = resolvedEdge
         self.offset = uuid.map { IslandSettings.dockOffset(forDisplayUUID: $0, edge: resolvedEdge) } ?? 0
-        self.currentSize = Self.collapsedSize(for: resolvedEdge, geometry: initialGeometry)
+        let resolvedIsFree = uuid.map { IslandSettings.placementMode(forDisplayUUID: $0) == .free } ?? false
+        self.isFreePositioned = resolvedIsFree
+        let visibleFrameForInit = screen?.visibleFrame ?? initialGeometry.screen
+        self.freeCenter = uuid.flatMap { IslandSettings.freePosition(forDisplayUUID: $0) } ?? CGPoint(x: visibleFrameForInit.midX, y: visibleFrameForInit.midY)
+        self.dockedCorner = uuid.flatMap { IslandSettings.dockedCorner(forDisplayUUID: $0) }
+        self.currentSize = Self.collapsedSize(for: (resolvedIsFree || self.dockedCorner != nil) ? .bottom : resolvedEdge, geometry: initialGeometry)
 
         super.init(
             contentRect: .zero, // real frame set via setFrame(_:display:) below, once contentView/silhouette exist.
@@ -162,6 +258,21 @@ final class NotchPanel: NSPanel {
         collectionBehavior = Self.overlayCollectionBehavior
         isMovable = false
         isReleasedWhenClosed = false
+        // NSPanel (unlike plain NSWindow) defaults this to `true` — without overriding it, this
+        // panel auto-hid itself every time the user switched to a different app (the app
+        // resigning active status), then reappeared once something reactivated it: the "blink on
+        // switching windows." The island has to stay visible across every app switch, same as any
+        // other persistent menu-bar accessory — it's never supposed to behave like a document
+        // window that hides along with its owning app.
+        hidesOnDeactivate = false
+        // A separate blink, specific to switching desktop Spaces / Mission Control (not app
+        // switching — `hidesOnDeactivate` above doesn't touch this): `.canJoinAllSpaces` windows
+        // get re-composited fresh into each Space by the WindowServer during the switch
+        // animation, and without this, AppKit's own default per-window transition (meant for
+        // ordinary document windows being shown/hidden) competes with that re-compositing and
+        // reads as a visible flash mid-transition. `.none` tells AppKit this panel never needs — or
+        // wants — its own animation layered on top of anything the system is already doing to it.
+        animationBehavior = .none
 
         hosting = NSHostingView(
             rootView: NotchView(
@@ -174,11 +285,13 @@ final class NotchPanel: NSPanel {
                 // itself against the already-mutated, now-expanded `currentSize` instead of its
                 // own real size — sizing itself as if it were the card it's being replaced by.
                 collapsedSize: { [weak self] in
-                    self.map { Self.collapsedSize(for: $0.edge, geometry: $0.geometry) } ?? .zero
+                    self.map { Self.collapsedSize(for: $0.effectiveEdgeForGeometry, geometry: $0.geometry) } ?? .zero
                 },
                 onSelectNoiseMode: onSelectNoiseMode, isModeVerified: isModeVerified,
                 supportsNoiseControl: supportsNoiseControl, isNotched: { [weak self] in self?.isNotched ?? false },
-                dockEdge: { [weak self] in self?.edge ?? .top },
+                dockEdge: { [weak self] in self?.effectiveEdgeForGeometry ?? .top },
+                dockedCorner: { [weak self] in self?.dockedCorner },
+                freeFloatingNotch: { [weak self] in self?.freeFloatingNotch() },
                 onCollapseTabTapped: { [weak self] in self?.handleTabTap() },
                 onReconnectTapped: onReconnectTapped, onOpenBluetoothSettingsTapped: onOpenBluetoothSettingsTapped,
                 lastMatchedProfileDisplayName: lastMatchedProfileDisplayName
@@ -199,7 +312,7 @@ final class NotchPanel: NSPanel {
         // NotchPanel always starts collapsed (currentSize above), so this initial envelope/layout
         // is the collapsed pill's own settled state — symmetric: true throughout, same as every
         // other settling call site (present()'s completion, presentImmediately()).
-        let initialEnvelope = Self.restingEnvelopeSize(for: currentSize, edge: edge, symmetric: true)
+        let initialEnvelope = envelopeSize(for: currentSize, symmetric: true)
         let container = NSView(frame: NSRect(origin: .zero, size: initialEnvelope))
         container.wantsLayer = true
         container.layer?.masksToBounds = false
@@ -208,7 +321,18 @@ final class NotchPanel: NSPanel {
         contentView = container
 
         silhouette.onTap = { [weak self] in self?.handleTap() }
-        silhouette.onDrag = { [weak self] delta in self?.handleDrag(delta) }
+        silhouette.canDrag = { [weak self] in !(self?.uiState.isExpanded ?? true) }
+        // Re-enabled: a `log stream` capture with this disabled showed drops landing hundreds to
+        // thousands of points off-screen, producing raw `offset`/`freeCenter` values so extreme
+        // that the collapsed pill's and expanded card's own per-size offset clamps (windowFrame
+        // (for:)'s own doc comment) disagreed by over 200pt for the same stored offset — that
+        // mismatch, not a bug in the clamping logic itself, was the actual cause of the tray
+        // opening displaced from the pill. It's also what made landing flush in a screen corner
+        // (DockPlacement.nearestCorner's own doc comment) unreliable: corner distance only reads
+        // as "close" when the drop is genuinely, physically flush, which an unclamped drag rarely
+        // produces by hand.
+        silhouette.clampOrigin = { [weak self] rawOrigin in self?.clampedDragOrigin(rawOrigin) ?? rawOrigin }
+        silhouette.onDragEnd = { [weak self] in self?.handleDragEnd() }
         silhouette.dockEdge = edge
 
         layoutContent(for: currentSize, envelopeSize: initialEnvelope, symmetric: true)
@@ -217,7 +341,7 @@ final class NotchPanel: NSPanel {
         silhouette.setFillColor(currentSilhouetteFillColor())
         // Give the silhouette an initial path immediately — otherwise it stays empty (zero
         // frame) until the first expand/collapse transition ever runs.
-        let initialGap = Self.collapsedGap(edge: edge, geometry: initialGeometry)
+        let initialGap = Self.collapsedGap(edge: effectiveEdgeForGeometry, geometry: initialGeometry)
         silhouette.resize(
             to: currentSize, from: currentSize,
             startGap: initialGap, targetGap: initialGap,
@@ -230,6 +354,28 @@ final class NotchPanel: NSPanel {
             self, selector: #selector(screenParametersChanged),
             name: NSApplication.didChangeScreenParametersNotification, object: nil
         )
+        // The blink the owner actually reported — switching desktop Spaces (3-finger swipe /
+        // Ctrl+arrow) and completing a Cmd+Tab app switch — is neither `hidesOnDeactivate` nor
+        // `animationBehavior` (both already set above; neither resolved it). It's a known,
+        // documented WindowServer quirk for an always-visible `.canJoinAllSpaces` overlay panel:
+        // during these transitions the compositor can momentarily mis-order or re-composite it,
+        // reading as a flash. There's no single NSWindow property that reliably prevents that —
+        // the practical mitigation other menu-bar overlay apps use is re-asserting the window to
+        // front the instant the transition actually completes, rather than trusting the
+        // WindowServer's own ordering to stay correct through it.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(reassertFrontAfterTransition),
+            name: NSWorkspace.activeSpaceDidChangeNotification, object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(reassertFrontAfterTransition),
+            name: NSWorkspace.didActivateApplicationNotification, object: nil
+        )
+    }
+
+    @objc private func reassertFrontAfterTransition() {
+        guard isVisible else { return }
+        orderFrontRegardless()
     }
 
     override var canBecomeKey: Bool { false }
@@ -287,14 +433,19 @@ final class NotchPanel: NSPanel {
 
     // MARK: - Settings changed (size/silhouette/fits/outline/display/edge)
 
-    var isNotched: Bool { edge == .top && geometry.isNotched }
-    var currentEdge: DockEdge { edge }
+    var isNotched: Bool { !isFreePositioned && dockedCorner == nil && edge == .top && geometry.isNotched }
 
     /// The fallback NSStatusItem menu's own "Island Settings…" item — see
     /// NotchUIState.islandSettingsRequestToken's own doc comment for why it has to go through
     /// NotchView instead of opening the window directly from here.
     func requestOpenIslandSettings() {
         uiState.islandSettingsRequestToken += 1
+    }
+
+    /// The fallback NSStatusItem menu's own "Report a Bug / Suggest a Feature…" item — same
+    /// token-bump pattern as requestOpenIslandSettings() above, and for the same reason.
+    func requestOpenFeedback() {
+        uiState.feedbackRequestToken += 1
     }
 
     func settingsDidChange() {
@@ -304,51 +455,6 @@ final class NotchPanel: NSPanel {
         // two things that guard compares. Without forcing it, that guard saw no difference and
         // bailed out before ever calling presentImmediately(), so the window silently never moved.
         reposition(force: true)
-    }
-
-    /// Island Settings' edge picker calls this directly (not through `settingsDidChange()`,
-    /// which just repositions on the *current* edge) — design/DESIGN_GUIDE.md §6: "Changing the
-    /// edge while the card is expanded: collapse first, move the pill, then expand from the new
-    /// edge. Never animate the card across the screen."
-    func setDockEdge(_ newEdge: DockEdge) {
-        guard newEdge != edge else { return }
-        switch DockPlacement.edgeChangeOrdering(isExpanded: uiState.isExpanded) {
-        case .collapseFirst:
-            // NotchUIState.isRepositioningEdge's own doc comment: this collapse/expand pair is
-            // triggered internally to relocate the card, not by the user tapping to actually
-            // close it, so the hero photo shouldn't fly to the pill for it — only the card
-            // shape's own scale+fade motion should play. `suppressPhotoFlight: true` on both
-            // calls below (not just the first) — `presentImmediately`'s own "move the pill" step
-            // in between unconditionally resets the flag, so the expand has to ask again, fresh.
-            //
-            // Collapse (normally animated — this step doesn't relocate anything, so there's
-            // nothing wrong with animating it) on the *old* edge, wait for that to actually
-            // finish, only then move the pill (unanimated — this is the step that would
-            // otherwise visibly cross the screen) and expand from the new edge.
-            collapse(suppressPhotoFlight: true) { [weak self] in
-                guard let self else { return }
-                self.applyEdgeChange(newEdge)
-                self.presentImmediately(expanded: false)
-                self.expand(suppressPhotoFlight: true)
-            }
-        case .moveDirectly:
-            applyEdgeChange(newEdge)
-            presentImmediately(expanded: false)
-        }
-    }
-
-    private func applyEdgeChange(_ newEdge: DockEdge) {
-        edge = newEdge
-        silhouette.dockEdge = newEdge
-        offset = currentDisplayUUID.map { IslandSettings.dockOffset(forDisplayUUID: $0, edge: newEdge) } ?? 0
-        if let currentDisplayUUID { IslandSettings.setDockEdge(newEdge, forDisplayUUID: currentDisplayUUID) }
-        currentSize = Self.collapsedSize(for: newEdge, geometry: geometry)
-        // See NotchUIState.geometryVersion's own doc comment — without this, switching edges
-        // while collapsed (the .moveDirectly case in setDockEdge, which never touches isExpanded
-        // or isAnimating) gives SwiftUI no reason to ever re-evaluate CollapsedPill's layout for
-        // the new edge, so the old orientation's own background stayed visible until some
-        // unrelated render happened to flush it through.
-        uiState.geometryVersion += 1
     }
 
     // MARK: - Expand / collapse
@@ -431,22 +537,195 @@ final class NotchPanel: NSPanel {
         collapse()
     }
 
-    // MARK: - Drag along the edge (collapsed only — design/DESIGN_GUIDE.md §6)
+    // MARK: - Free drag anywhere on screen, snapping to an edge on release
 
-    private func handleDrag(_ delta: CGFloat) {
-        guard !uiState.isExpanded else { return }
-        let expandedSize = Self.expandedSize(for: edge, geometry: geometry)
-        offset = DockPlacement.clampedOffset(
-            offset + delta, collapsedSize: currentSize, expandedSize: expandedSize, edge: edge, visibleFrame: visibleFrame
+    /// Called on every single `mouseDragged` tick (see `NotchSilhouetteView.mouseDragged`'s own
+    /// doc comment for why this has to be a live, per-tick clamp rather than a one-shot
+    /// correction after the fact). `rawOrigin` is the window's own next unclamped *envelope*
+    /// origin — the drag only ever starts while collapsed (`canDrag` forbids it otherwise), so the
+    /// envelope is always the small pill's `currentSize` padded symmetrically by `shadowMargin` on
+    /// every side (same math as `restingEnvelopeSize(for:edge:symmetric: true)`). Clamping
+    /// happens against the actual visible content rect, not the padded envelope itself, for the
+    /// same reason `handleDragEnd()` below measures distances against content, not envelope: the
+    /// envelope legitimately extends past the real screen edge by design whenever the configured
+    /// edge margin is smaller than `shadowMargin` (the default always is), so clamping the
+    /// envelope directly would fight that and drag the visible pill away from the real edge.
+    ///
+    /// Resolves the active screen fresh from `rawOrigin` itself (geometric overlap, same
+    /// `resolveScreen(overlapping:)` used everywhere else — never `self.screen`/`NSScreen.main`,
+    /// which don't reliably track this non-key panel's real screen), so a drag that crosses from
+    /// one display onto another stays correctly bounded by whichever display it's actually over
+    /// at that instant, not whichever one the drag started on.
+    private func clampedDragOrigin(_ rawOrigin: CGPoint) -> CGPoint {
+        let contentSize = currentSize
+        let rawContentOrigin = CGPoint(x: rawOrigin.x + Self.shadowMargin, y: rawOrigin.y + Self.shadowMargin)
+        let rawContentFrame = CGRect(origin: rawContentOrigin, size: contentSize)
+        let activeVisibleFrame = Self.resolveScreen(overlapping: rawContentFrame)?.visibleFrame ?? visibleFrame
+
+        let clampedContentOrigin = CGPoint(
+            x: min(max(rawContentOrigin.x, activeVisibleFrame.minX), activeVisibleFrame.maxX - contentSize.width),
+            y: min(max(rawContentOrigin.y, activeVisibleFrame.minY), activeVisibleFrame.maxY - contentSize.height)
         )
-        // A live drag just follows the cursor — no envelope-then-settle animation, the same way
-        // dragging any ordinary window doesn't animate. Dragging only ever happens while collapsed
-        // (the guard above) — symmetric: true, matching the envelope size content was last laid
-        // out against (the window's own size has to stay in lockstep with that, even though a drag
-        // only ever moves the window, never re-lays-out its content).
-        let envelope = Self.restingEnvelopeSize(for: currentSize, edge: edge, symmetric: true)
-        setFrame(windowFrame(for: envelope, symmetric: true), display: true)
-        if let currentDisplayUUID { IslandSettings.setDockOffset(offset, forDisplayUUID: currentDisplayUUID, edge: edge) }
+        return CGPoint(x: clampedContentOrigin.x - Self.shadowMargin, y: clampedContentOrigin.y - Self.shadowMargin)
+    }
+
+    /// Mirrors `clampedDragOrigin(_:)` above, but in content-rect terms against whichever screen
+    /// `frame` (the actual window, post-drag) now overlaps most — used both by the live per-tick
+    /// clamp during the drag and, here, by the one-shot docking decision once it ends.
+    ///
+    /// By the time this fires, `NotchSilhouetteView.mouseDragged` has already moved the window to
+    /// its final dropped position (each tick already clamped live via `clampedDragOrigin(_:)`) —
+    /// all that's left is deciding whether that drop counts as docking to the nearest edge or
+    /// settling into free placement, and persisting the result.
+    ///
+    /// Decides, once a drag actually ends, whether the island docks to the nearest screen edge
+    /// (close enough — `Self.edgeSnapDistance`) or settles into free placement at wherever it was
+    /// dropped. Either way the result is persisted immediately, same as every other placement
+    /// change in this file.
+    private func handleDragEnd() {
+        // The drag may have crossed onto a different physical display than the one
+        // `visibleFrame`/`currentDisplayUUID` were last resolved for — `reposition()` resolves
+        // against "whichever screen should host the menu bar companion" (IslandSettings.
+        // chosenDisplayUUID or wherever the menu bar currently is), not "whichever screen the pill
+        // actually just landed on." Refresh both from the window's own real position before
+        // computing anything below, or every distance/clamp here would still measure against the
+        // *old* screen's bounds.
+        //
+        // Also persist this as the new `chosenDisplayUUID` — not just `currentDisplayUUID` here in
+        // memory. Without this, `currentDisplayUUID` and the saved display preference could
+        // disagree the moment a drag lands on a display other than the previously-chosen one: any
+        // later `reposition()` (fired by `screenParametersChanged`, which reacts to routine screen-
+        // parameter notifications, not only an actual monitor being connected/disconnected) always
+        // re-resolves against the *saved* preference, found that it no longer matched
+        // `currentDisplayUUID`, and reloaded `offset`/`edge` fresh from `IslandSettings` for that
+        // other (stale-preference) display — 0 (centered) if nothing had ever been saved there —
+        // discarding wherever the drop had actually just placed it. Explicitly dragging the island
+        // onto a display is as clear a signal of the user's intended display as the Island
+        // Settings picker itself.
+        if let droppedScreen = Self.resolveScreen(overlapping: frame) {
+            visibleFrame = droppedScreen.visibleFrame
+            currentDisplayUUID = droppedScreen.stableDisplayUUIDString
+            IslandSettings.chosenDisplayUUID = currentDisplayUUID
+        }
+
+        // Deliberately NOT clamping `frame` itself here. `frame` is the padded *envelope*
+        // (currentSize inflated by `shadowMargin`, 40pt a side, for shadow/glow bleed room) —
+        // when the configured edge margin is smaller than that padding (the 20pt default always
+        // is), the envelope's own legitimate resting position already sits past the screen edge
+        // on purpose (windowFrame(for:)'s own `symmetric` compensation relies on exactly this, to
+        // keep the *visible* pill at the correct inset while the invisible backing-store room
+        // still has somewhere to go). A blunt clamp on `frame` here was fighting that and forcing
+        // the envelope's edge to land exactly on the screen's real edge on almost every drop near
+        // the top or bottom — which made `distanceToBottom`/`distanceToTop` read as 0 nearly every
+        // time, which always counted as "close enough to dock," which is exactly what read as
+        // "it keeps jumping back to a fixed, docked position" regardless of where it was dropped.
+        // Measuring against the actual visible content (the small circle, centered within the
+        // envelope) instead of the envelope's own padded bounds is what the user visually
+        // perceives as "how close to the edge," and has none of this false-positive problem.
+        let droppedFrame = frame
+        let contentSize = currentSize
+        let contentFrame = CGRect(
+            x: droppedFrame.midX - contentSize.width / 2, y: droppedFrame.midY - contentSize.height / 2,
+            width: contentSize.width, height: contentSize.height
+        )
+        let center = CGPoint(x: droppedFrame.midX, y: droppedFrame.midY)
+
+        // Checked before the single-edge distances just below, and wins if it matches: a drop
+        // close enough to where two edges actually meet docks into that corner, not just the
+        // nearer of the two edges (which, before corner docking existed, is what overflowed past
+        // the far one — NotchPanel.windowFrame(for:)'s own `.top` case doc comment has the "part
+        // of it is hidden" symptom this fixed).
+        if let corner = DockPlacement.nearestCorner(contentFrame: contentFrame, visibleFrame: visibleFrame, snapDistance: Self.cornerSnapDistance) {
+            dockToCorner(corner)
+            return
+        }
+
+        let distanceToTop = visibleFrame.maxY - contentFrame.maxY
+        let distanceToBottom = contentFrame.minY - visibleFrame.minY
+        let distanceToLeft = contentFrame.minX - visibleFrame.minX
+        let distanceToRight = visibleFrame.maxX - contentFrame.maxX
+        let distances: [(DockEdge, CGFloat)] = [
+            (.top, distanceToTop), (.bottom, distanceToBottom), (.left, distanceToLeft), (.right, distanceToRight)
+        ]
+        let nearest = distances.min { $0.1 < $1.1 }
+        if let nearest, nearest.1 <= Self.edgeSnapDistance {
+            dockToEdge(nearest.0, nearCenter: center)
+        } else {
+            settleFreePositioned(atCenter: center)
+        }
+    }
+
+    /// Docks the island flush into `corner` — unlike `dockToEdge`, there's no `nearCenter`-derived
+    /// offset to compute at all (`cornerFrame`'s own doc comment): the corner itself is the whole
+    /// placement, so docking here is always exact, never approximate-then-clamped the way an edge
+    /// offset is.
+    private func dockToCorner(_ corner: ScreenCorner) {
+        dockedCorner = corner
+        isFreePositioned = false
+        if let currentDisplayUUID {
+            IslandSettings.setPlacementMode(.edge, forDisplayUUID: currentDisplayUUID)
+            IslandSettings.setDockedCorner(corner, forDisplayUUID: currentDisplayUUID)
+        }
+        currentSize = Self.collapsedSize(for: effectiveEdgeForGeometry, geometry: geometry)
+        uiState.geometryVersion += 1
+        presentImmediately(expanded: false)
+    }
+
+    /// Docks the island to `newEdge`, computing the offset from `nearCenter` so it ends up as
+    /// close as possible to where it was actually dropped (clamped, same as every other offset
+    /// change) rather than snapping back to the edge's own middle.
+    private func dockToEdge(_ newEdge: DockEdge, nearCenter: CGPoint) {
+        let rawOffset = newEdge.isVertical ? (nearCenter.y - visibleFrame.midY) : (nearCenter.x - visibleFrame.midX)
+        edge = newEdge
+        isFreePositioned = false
+        dockedCorner = nil
+        silhouette.dockEdge = newEdge
+        // Clamped against the small collapsed pill's own range only, not intersected with the
+        // expanded card's — windowFrame(for:)'s own doc comment covers the expanded case
+        // separately now (clamped fresh, live, against whichever size it's actually resolving),
+        // so the *persisted*, resting offset only has to keep the pill itself on screen. Clamping
+        // it against the card's own (much tighter) valid range here instead pulled the resting
+        // pill dramatically toward the edge's middle whenever it was dropped well away from
+        // center — a visible, large jump up/down (or left/right) from wherever it was dropped.
+        offset = DockPlacement.clampedOffset(
+            rawOffset, collapsedSize: currentSize, expandedSize: currentSize, edge: newEdge, visibleFrame: visibleFrame
+        )
+        if let currentDisplayUUID {
+            IslandSettings.setPlacementMode(.edge, forDisplayUUID: currentDisplayUUID)
+            IslandSettings.setDockEdge(newEdge, forDisplayUUID: currentDisplayUUID)
+            IslandSettings.setDockOffset(offset, forDisplayUUID: currentDisplayUUID, edge: newEdge)
+            IslandSettings.setDockedCorner(nil, forDisplayUUID: currentDisplayUUID)
+        }
+        uiState.geometryVersion += 1
+        presentImmediately(expanded: false)
+    }
+
+    /// Settles into free placement at `center`, clamped so the pill can never end up fully off
+    /// whatever's left of the visible screen area.
+    private func settleFreePositioned(atCenter center: CGPoint) {
+        // Clamped against the small *collapsed* pill's own footprint, not the much larger
+        // expanded card's — windowFrame(for:)'s own doc comment covers the expanded case
+        // separately now (clamped fresh, live, against whichever size is actually being resolved
+        // at the time), so this only has to guarantee the *resting*, collapsed position itself is
+        // on screen. Clamping by the card's footprint here instead pushed any pill dropped within
+        // ~150-190pt of an edge inward to that same fixed distance every time, regardless of
+        // where it was actually dropped — the opposite of "stay where I put it."
+        let halfWidth = currentSize.width / 2
+        let halfHeight = currentSize.height / 2
+        let clampedCenter = CGPoint(
+            x: min(max(center.x, visibleFrame.minX + halfWidth), visibleFrame.maxX - halfWidth),
+            y: min(max(center.y, visibleFrame.minY + halfHeight), visibleFrame.maxY - halfHeight)
+        )
+        isFreePositioned = true
+        freeCenter = clampedCenter
+        dockedCorner = nil
+        if let currentDisplayUUID {
+            IslandSettings.setPlacementMode(.free, forDisplayUUID: currentDisplayUUID)
+            IslandSettings.setFreePosition(clampedCenter, forDisplayUUID: currentDisplayUUID)
+            IslandSettings.setDockedCorner(nil, forDisplayUUID: currentDisplayUUID)
+        }
+        uiState.geometryVersion += 1
+        presentImmediately(expanded: false)
     }
 
     // MARK: - Click outside collapses (global monitor); screen-edge strip above a capsule opens it
@@ -455,7 +734,7 @@ final class NotchPanel: NSPanel {
     /// own window, so a normal click there never reaches us — only a top capsule needs this; the
     /// other three edges have no such gap to bridge.
     private var screenEdgeClickArea: CGRect? {
-        guard edge == .top, let gap = geometry.floatingGap, gap > 0, !uiState.isExpanded, isVisible, !ignoresMouseEvents else { return nil }
+        guard !isFreePositioned, edge == .top, let gap = geometry.floatingGap, gap > 0, !uiState.isExpanded, isVisible, !ignoresMouseEvents else { return nil }
         // Only ever reached while collapsed (the guard above) — symmetric: true, matching every
         // other collapsed-state windowFrame(for:) call, so this strip starts from the real
         // window's actual top edge, not where it would've been under the old flush positioning.
@@ -464,7 +743,13 @@ final class NotchPanel: NSPanel {
     }
 
     private func syncScreenEdgeMonitors() {
-        let events: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseUp, .leftMouseDragged]
+        // Deliberately NOT `.leftMouseDragged` — that used to fire this monitor pair (each
+        // hopping through a `Task { @MainActor in ... }`) on *every* drag tick of the island's
+        // own pill drag too, competing with that drag's own synchronous window move for
+        // main-thread time and reading as the drag stuttering or cutting out partway through.
+        // This monitor only ever needs press/release for the thin top-edge click strip
+        // (screenEdgeClickArea's own doc comment) — it never needed drag deltas at all.
+        let events: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseUp]
         guard screenEdgeMonitors.isEmpty else { return }
         if let token = NSEvent.addGlobalMonitorForEvents(matching: events, handler: { [weak self] event in
             Task { @MainActor in self?.handleScreenEdgeEvent(event) }
@@ -485,9 +770,6 @@ final class NotchPanel: NSPanel {
             let wasPressed = screenEdgePressed
             screenEdgePressed = false
             if wasPressed, area.contains(point) { expand() }
-        case .leftMouseDragged:
-            // A press that moves without leaving the strip does not cancel the click.
-            if screenEdgePressed, !area.contains(point) { screenEdgePressed = false }
         default:
             break
         }
@@ -512,26 +794,47 @@ final class NotchPanel: NSPanel {
         let nextUUID = screen.stableDisplayUUIDString
 
         if nextUUID != currentDisplayUUID {
-            // A genuinely different physical display — load *that* display's own saved edge/
-            // offset rather than carrying over whatever was in memory for the old one.
+            // A genuinely different physical display — load *that* display's own saved
+            // placement rather than carrying over whatever was in memory for the old one.
             currentDisplayUUID = nextUUID
             edge = nextUUID.map { IslandSettings.dockEdge(forDisplayUUID: $0) } ?? .top
             offset = nextUUID.map { IslandSettings.dockOffset(forDisplayUUID: $0, edge: edge) } ?? 0
+            isFreePositioned = nextUUID.map { IslandSettings.placementMode(forDisplayUUID: $0) == .free } ?? false
+            freeCenter = nextUUID.flatMap { IslandSettings.freePosition(forDisplayUUID: $0) } ?? CGPoint(x: nextVisibleFrame.midX, y: nextVisibleFrame.midY)
+            dockedCorner = nextUUID.flatMap { IslandSettings.dockedCorner(forDisplayUUID: $0) }
             silhouette.dockEdge = edge
         }
 
-        let nextCollapsedSize = Self.collapsedSize(for: edge, geometry: next)
+        // A resolution/Dock change (even on the same display) can push a previously-valid free
+        // position outside the new visible area — clamp it back in, same reasoning as the offset
+        // re-clamp below.
+        if isFreePositioned {
+            // The small collapsed pill's own footprint, not the expanded card's — see
+            // windowFrame(for:)'s own doc comment: the expanded case now clamps itself fresh,
+            // live, against whichever size it's actually resolving, so this only has to keep the
+            // *resting* position on screen.
+            let freeSize = Self.collapsedSize(for: effectiveEdgeForGeometry, geometry: next)
+            let halfWidth = freeSize.width / 2
+            let halfHeight = freeSize.height / 2
+            freeCenter = CGPoint(
+                x: min(max(freeCenter.x, nextVisibleFrame.minX + halfWidth), nextVisibleFrame.maxX - halfWidth),
+                y: min(max(freeCenter.y, nextVisibleFrame.minY + halfHeight), nextVisibleFrame.maxY - halfHeight)
+            )
+        }
+
+        let nextCollapsedSize = Self.collapsedSize(for: effectiveEdgeForGeometry, geometry: next)
         guard force || next != geometry || visibleFrame != nextVisibleFrame
-            || currentSize != (uiState.isExpanded ? Self.expandedSize(for: edge, geometry: next) : nextCollapsedSize)
+            || currentSize != (uiState.isExpanded ? Self.expandedSize(for: effectiveEdgeForGeometry, geometry: next) : nextCollapsedSize)
         else { return }
 
         geometry = next
         visibleFrame = nextVisibleFrame
         // A resolution/Dock change can push the current offset out of bounds even though the
         // display itself didn't change — re-clamp (never reset to 0) so a drag the user placed
-        // deliberately only moves as little as it has to.
-        let expandedSizeNow = Self.expandedSize(for: edge, geometry: next)
-        offset = DockPlacement.clampedOffset(offset, collapsedSize: nextCollapsedSize, expandedSize: expandedSizeNow, edge: edge, visibleFrame: nextVisibleFrame)
+        // deliberately only moves as little as it has to. Against the collapsed pill's own range
+        // only, not the expanded card's — windowFrame(for:)'s own doc comment covers the expanded
+        // case separately, clamped fresh against whichever size it's actually resolving.
+        offset = DockPlacement.clampedOffset(offset, collapsedSize: nextCollapsedSize, expandedSize: nextCollapsedSize, edge: edge, visibleFrame: nextVisibleFrame)
         syncScreenEdgeMonitors()
         // See NotchUIState.geometryVersion's own doc comment — a display/resolution/Dock change
         // can change `edge` (a different display's own saved edge) or `geometry` (notch presence,
@@ -541,14 +844,21 @@ final class NotchPanel: NSPanel {
         presentImmediately(expanded: uiState.isExpanded)
     }
 
-    /// Resets the saved display preference ("Automatic") and re-resolves. Exposed for the
-    /// AppKit status-item fallback's "Reset Position" item, so a user stuck with the island
-    /// placed on a disconnected/misconfigured display (or just wanting a clean slate) has a way
-    /// to recover without digging into Island Settings.
-    func resetToDefaultDisplay() {
-        logger.info("resetToDefaultDisplay(): clearing saved display preference")
-        IslandSettings.chosenDisplayUUID = nil
-        reposition()
+    /// Resolves which physical display `rect` actually sits on by direct geometric overlap
+    /// against every connected `NSScreen`, picking whichever has the most overlapping area —
+    /// robust even when `rect` straddles the seam between two displays, unlike testing a single
+    /// point. Deliberately never consults `self.screen` or `NSScreen.main`: both are documented
+    /// to track whichever screen holds the *key* window, and `NotchPanel.canBecomeKey` is
+    /// hardcoded to `false` (the island must never steal focus) — there's no guarantee either
+    /// property tracks this specific window's own real position at all, let alone live during a
+    /// drag, which is exactly the kind of mismatch that read as the drop snapping to a boundary
+    /// from a completely different (and wrong) screen's bounds.
+    private static func resolveScreen(overlapping rect: CGRect) -> NSScreen? {
+        func overlapArea(_ screen: NSScreen) -> CGFloat {
+            let intersection = screen.frame.intersection(rect)
+            return max(0, intersection.width) * max(0, intersection.height)
+        }
+        return NSScreen.screens.max { overlapArea($0) < overlapArea($1) }
     }
 
     private struct ScreenResolution {
@@ -649,18 +959,169 @@ final class NotchPanel: NSPanel {
     /// says. Shifts the window itself to cancel that out exactly, so the setting stays accurate —
     /// the extra room is still there for hover-scale/shadow to bleed into, it's just invisible
     /// window backing-store space the content is centered away from, not a visible gap.
-    private func windowFrame(for size: CGSize, symmetric: Bool = false) -> CGRect {
+    private func windowFrame(for size: CGSize, symmetric: Bool = false, isExpanded: Bool = false) -> CGRect {
+        if let corner = dockedCorner {
+            // The actual fix for "the tray opens from a displaced position": `cornerFrame` is
+            // fully determined by `corner` alone (see its own doc comment) — the same physical
+            // screen point stays flush between the small collapsed quarter-disc and the much
+            // larger expanded card, so there's nothing here for a size change to ever need to
+            // shift, unlike a single-edge dock's offset (which only has one free axis to begin
+            // with, not the "which direction does the card grow" problem a corner has on both).
+            // Same symmetric/margin compensation reasoning as the single-edge branch below, just
+            // applied to both axes instead of one, since both are flush at a corner.
+            let margin = symmetric
+                ? IslandSettings.edgeMargin(for: .top) - Self.shadowMargin : IslandSettings.edgeMargin(for: .top)
+            return DockPlacement.cornerFrame(for: size, corner: corner, visibleFrame: visibleFrame, margin: margin)
+        }
+        if isFreePositioned {
+            // The collapsed pill still just centers on `freeCenter` — unchanged, same reasoning as
+            // ever (below). The *expanded* card no longer does: owner spec (2026-10-21) — a
+            // free-floating tray opens adjacent to the island, in whichever direction
+            // `DockPlacement.trayDirection(for:)` names for the island's own grid region, rather
+            // than growing symmetrically outward around the same center the pill rests at (which
+            // routinely covered the island itself). `isExpanded` is what distinguishes the two —
+            // `symmetric` can't: it's unconditionally true for *every* free-positioned call,
+            // collapsed or expanded alike (every call site already notes this), so it carries no
+            // information about which one this actually is.
+            if isExpanded {
+                return freeFloatingTrayFrame(for: size)
+            }
+            // Free placement has no docked edge to be flush against, so `size` (the envelope,
+            // already inclusive of shadowMargin) is always centered directly on `freeCenter` —
+            // the collapsed pill grows outward around the same point it rests at, regardless of
+            // `symmetric`. `freeCenter` itself only ever gets clamped against the small
+            // *collapsed* pill's own footprint (settleFreePositioned's own doc comment) —
+            // clamping it against the much larger expanded card's footprint instead, up front,
+            // used to push any pill placed within ~150-190pt of an edge inward to that same fixed
+            // distance every time, no matter where it was actually dropped. Clamping fresh here,
+            // against whichever `size` is actually being resolved right now, means the resting
+            // pill stays exactly where it was dropped (its own envelope is small enough to need
+            // little or no correction almost everywhere).
+            let halfWidth = size.width / 2
+            let halfHeight = size.height / 2
+            let clampedCenterX = min(max(freeCenter.x, visibleFrame.minX + halfWidth), visibleFrame.maxX - halfWidth)
+            let clampedCenterY = min(max(freeCenter.y, visibleFrame.minY + halfHeight), visibleFrame.maxY - halfHeight)
+            return CGRect(x: clampedCenterX - halfWidth, y: clampedCenterY - halfHeight, width: size.width, height: size.height)
+        }
         switch edge {
         case .top:
+            // `offset` re-clamped fresh here, against whichever `size` is actually being resolved
+            // right now — same reasoning as the `.bottom, .left, .right` branch just below (its own
+            // doc comment has the full story). `.top` used to add the raw, pill-sized `offset`
+            // straight into `geometry.frame(for:)`'s result with no bound at all, so a pill (or,
+            // worse, the much wider expanded card) docked near a left/right corner could legitimately
+            // overflow the real screen edge — not just the invisible shadow-margin envelope, but far
+            // enough to get hard-clipped by the OS, which is what read as "part of it is hidden."
             var frame = geometry.frame(for: size)
             if symmetric { frame.origin.y += Self.shadowMargin }
-            frame.origin.x += offset
+            let adaptiveOffset: CGFloat
+            if let range = DockPlacement.offsetRange(forSize: size, edge: edge, visibleFrame: visibleFrame, margin: 8) {
+                adaptiveOffset = min(max(offset, range.lowerBound), range.upperBound)
+            } else {
+                adaptiveOffset = 0
+            }
+            frame.origin.x += adaptiveOffset
             return frame
         case .bottom, .left, .right:
             let margin = symmetric ? IslandSettings.edgeMargin(for: edge) - Self.shadowMargin : IslandSettings.edgeMargin(for: edge)
-            return DockPlacement.frame(for: size, edge: edge, offset: offset, visibleFrame: visibleFrame, margin: margin)
+            // `offset` (the *persisted* value, clamped only against the small collapsed pill's
+            // own range — see `dockToEdge`'s own doc comment) is re-clamped fresh here, against
+            // whichever `size` is actually being resolved right now, same reasoning and same bug
+            // this fixed for free placement just above: using the raw, pill-sized `offset`
+            // directly for the much taller/wider expanded card's own frame could request a frame
+            // that doesn't fit — nothing would correct that, so macOS's own window-placement
+            // safeguards would force it elsewhere the instant it expanded (a visible jump to a
+            // different position than where the pill was actually resting).
+            let adaptiveOffset: CGFloat
+            if let range = DockPlacement.offsetRange(forSize: size, edge: edge, visibleFrame: visibleFrame, margin: 8) {
+                adaptiveOffset = min(max(offset, range.lowerBound), range.upperBound)
+            } else {
+                adaptiveOffset = 0
+            }
+            return DockPlacement.frame(for: size, edge: edge, offset: adaptiveOffset, visibleFrame: visibleFrame, margin: margin)
         }
     }
+
+    /// `windowFrame(for:isExpanded:)`'s own free-floating, expanded-only branch — owner spec
+    /// (2026-10-21): the tray opens adjacent to the island (never over it), in the direction its
+    /// own 3x3 grid region names, flipping to the opposite side first if the preferred one
+    /// doesn't fit, and only clamping as a last resort. `DockPlacement.trayPlacement(...)` is pure
+    /// and works in *content* terms (the actual visible pill/card, not the padded envelope); `size`
+    /// here is always the symmetric envelope (content inflated by `shadowMargin` on all four
+    /// sides — true for every free-positioned call, `windowFrame`'s own doc comment on why
+    /// `symmetric` itself can't be trusted to say so), so the content size this function actually
+    /// needs is recovered by stripping that same padding back off before calling into it, and the
+    /// placement it returns gets the same padding added back to turn it into this envelope's frame.
+    private func freeFloatingTrayFrame(for envelopeSize: CGSize) -> CGRect {
+        let contentSize = CGSize(width: envelopeSize.width - Self.shadowMargin * 2, height: envelopeSize.height - Self.shadowMargin * 2)
+        let placement = freeFloatingPlacement(forContentSize: contentSize)
+        let envelopeOrigin = CGPoint(x: placement.origin.x - Self.shadowMargin, y: placement.origin.y - Self.shadowMargin)
+        return CGRect(origin: envelopeOrigin, size: envelopeSize)
+    }
+
+    /// Shared by `freeFloatingTrayFrame(for:)` (the window's own placement) and `freeFloatingNotch()`
+    /// (the card's own notch position) — both need the *same* placement decision, not two
+    /// independently-computed ones that could disagree about which direction the tray actually
+    /// went.
+    private func freeFloatingPlacement(forContentSize contentSize: CGSize) -> (origin: CGPoint, direction: TrayDirection) {
+        let islandSize = Self.collapsedSize(for: effectiveEdgeForGeometry, geometry: geometry)
+        let region = DockPlacement.gridRegion(for: freeCenter, visibleFrame: visibleFrame)
+        let preferredDirection = DockPlacement.trayDirection(for: region)
+        return DockPlacement.trayPlacement(
+            islandCenter: freeCenter, islandSize: islandSize, traySize: contentSize, preferredDirection: preferredDirection,
+            gap: Self.freeTrayGap, visibleFrame: visibleFrame
+        )
+    }
+
+    /// Free-floating only: which edge of the card the notch sits on, and how far along it, so it
+    /// stays aligned with the island (`DockPlacement.notchOffset(...)`'s own doc comment) —
+    /// `nil` for every other placement mode (edge dock, corner dock), which keep
+    /// `CutoutTabShape`'s own default centered tab untouched. Uses the *expanded* card's real
+    /// content size, not whatever `currentSize` happens to be at the moment this is called — it
+    /// only ever matters while the card is actually showing.
+    func freeFloatingNotch() -> (dock: CardDock, offset: CGFloat, anchor: UnitPoint)? {
+        guard isFreePositioned, dockedCorner == nil else { return nil }
+        let cardContentSize = Self.expandedSize(for: effectiveEdgeForGeometry, geometry: geometry)
+        let placement = freeFloatingPlacement(forContentSize: cardContentSize)
+        let notchDock: CardDock
+        switch DockPlacement.notchDirection(for: placement.direction) {
+        case .up: notchDock = .top
+        case .down: notchDock = .bottom
+        case .left: notchDock = .left
+        case .right: notchDock = .right
+        }
+        let offset = DockPlacement.notchOffset(
+            islandCenter: freeCenter, trayOrigin: placement.origin, traySize: cardContentSize, direction: placement.direction,
+            cornerRadius: 33, notchHalfLength: Self.cardCutoutTabHalfLength(forVertical: notchDock.isVertical)
+        )
+        // Owner spec, step 3: "the open animation originates from the island's position." Same
+        // along-edge position the notch itself sits at (just expressed as a 0...1 UnitPoint
+        // instead of a raw offset) — reusing it rather than recomputing from `freeCenter` directly
+        // is what guarantees the animation's own anchor and the notch's own position can never
+        // disagree about where the island actually is.
+        let anchor: UnitPoint
+        switch notchDock {
+        case .top: anchor = UnitPoint(x: 0.5 + offset / cardContentSize.width, y: 0)
+        case .bottom: anchor = UnitPoint(x: 0.5 + offset / cardContentSize.width, y: 1)
+        case .left: anchor = UnitPoint(x: 0, y: 0.5 + offset / cardContentSize.height)
+        case .right: anchor = UnitPoint(x: 1, y: 0.5 + offset / cardContentSize.height)
+        }
+        return (notchDock, offset, anchor)
+    }
+
+    /// `ExpandedCard.tabLengthAlongEdge`'s own two values, mirrored here (that file's own
+    /// doc comment) — `freeFloatingNotch()` needs the same "how long is the notch" figure to
+    /// clamp its offset away from the card's rounded corners, and ExpandedCard is a SwiftUI view,
+    /// not something NotchPanel can just ask directly.
+    private static func cardCutoutTabHalfLength(forVertical isVertical: Bool) -> CGFloat {
+        (isVertical ? 92 : 116) / 2
+    }
+
+    /// Real, visible space between the island and the tray when free-floating — enough that they
+    /// read as two distinct things, not touching (`DockPlacement.trayOrigin(...)`'s own `gap`).
+    /// Owner request: pulled in tighter than the original 10pt so the tray reads as closer to —
+    /// almost touching — the island it unfolded from.
+    private static let freeTrayGap: CGFloat = 4
 
     // MARK: - Present (envelope-then-settle resize)
 
@@ -672,7 +1133,7 @@ final class NotchPanel: NSPanel {
     /// supersedes this one — always leaves the flag correct for itself, the same reasoning
     /// `presentImmediately` already applies to `isAnimating` below.
     private func present(expanded: Bool, suppressPhotoFlight: Bool = false, completion: @escaping () -> Void = {}) {
-        let target = expanded ? Self.expandedSize(for: edge, geometry: geometry) : Self.collapsedSize(for: edge, geometry: geometry)
+        let target = expanded ? Self.expandedSize(for: effectiveEdgeForGeometry, geometry: geometry) : Self.collapsedSize(for: effectiveEdgeForGeometry, geometry: geometry)
         guard target != currentSize else {
             uiState.isExpanded = expanded
             uiState.isAnimating = false
@@ -723,9 +1184,16 @@ final class NotchPanel: NSPanel {
         // the completion handler's own `restingEnvelopeSize` come out identical there and the
         // window never needs to move at all mid-swing; a collapse's don't, which is exactly the
         // shrink this envelope now correctly defers to the completion handler below.
-        let envelope = Self.restingEnvelopeSize(for: contentLayoutSize, edge: edge)
-        setFrame(windowFrame(for: envelope), display: true)
-        layoutContent(for: contentLayoutSize, envelopeSize: envelope)
+        // Free placement has no docked edge to be flush against mid-swing either — always
+        // symmetric, same reasoning as the settled states above.
+        let envelope = self.envelopeSize(for: contentLayoutSize, symmetric: isFreePositioned)
+        // `contentLayoutSize` is always the *expanded* size for the whole swing, either direction
+        // ("grow first/shrink last" — this function's own doc comment above), so the window is
+        // always card-sized here regardless of whether this is an expand or a collapse — the
+        // free-floating tray placement branch (`windowFrame(for:isExpanded:)`'s own doc comment)
+        // applies for the entire swing, not just half of it.
+        setFrame(windowFrame(for: envelope, symmetric: isFreePositioned, isExpanded: true), display: true)
+        layoutContent(for: contentLayoutSize, envelopeSize: envelope, symmetric: isFreePositioned)
         // Forces AppKit to resolve that frame change — and SwiftUI's own layout pass inside
         // `hosting` to catch up with it — synchronously, right now, rather than on whatever the
         // next display-link callback happens to be. Without this, the brand-new view NotchView's
@@ -739,7 +1207,7 @@ final class NotchPanel: NSPanel {
 
         // The pill's full-circle shape only ever belongs to the small collapsed indicator — the
         // wide expanded card is always a plain rounded rectangle (gap nil).
-        let targetGap = expanded ? nil : Self.collapsedGap(edge: edge, geometry: geometry)
+        let targetGap = expanded ? nil : Self.collapsedGap(edge: effectiveEdgeForGeometry, geometry: geometry)
 
         // The native backdrop only ever matters for the *static*, at-rest silhouette (the shape
         // both CollapsedPill and ExpandedCard already draw their own complete background and
@@ -780,14 +1248,18 @@ final class NotchPanel: NSPanel {
             // true small target on a collapse — the "shrink after animating" half of the same rule.
             // symmetric: !expanded — only the pill's own settled state gets margin on its docked
             // side too (layoutContent's own doc comment); the settled card stays flush, unchanged.
-            let restEnvelope = Self.restingEnvelopeSize(for: target, edge: self.edge, symmetric: !expanded)
-            self.setFrame(self.windowFrame(for: restEnvelope, symmetric: !expanded), display: true)
-            self.layoutContent(for: target, envelopeSize: restEnvelope, symmetric: !expanded)
+            // Free placement has no docked edge at all, so it's always symmetric regardless of
+            // `expanded` — both the pill and the card center on `freeCenter`.
+            let symmetricNow = self.isFreePositioned || !expanded
+            let restEnvelope = self.envelopeSize(for: target, symmetric: symmetricNow)
+            let restFrame = self.windowFrame(for: restEnvelope, symmetric: symmetricNow, isExpanded: expanded)
+            self.setFrame(restFrame, display: true)
+            self.layoutContent(for: target, envelopeSize: restEnvelope, symmetric: symmetricNow)
             // The backdrop reappears here already showing whichever final state (fill color set
             // above, shape) this swing actually ended at.
             self.silhouette.resize(
                 to: target, from: target, startGap: targetGap, targetGap: targetGap,
-                envelopeSize: restEnvelope, symmetric: !expanded, reduceMotion: true, completion: {}
+                envelopeSize: restEnvelope, symmetric: symmetricNow, reduceMotion: true, completion: {}
             )
             self.silhouette.alphaValue = 1
             completion()
@@ -799,7 +1271,7 @@ final class NotchPanel: NSPanel {
     /// edge change (design/DESIGN_GUIDE.md §6: "Never animate the card across the screen").
     private func presentImmediately(expanded: Bool) {
         uiState.isExpanded = expanded
-        let target = expanded ? Self.expandedSize(for: edge, geometry: geometry) : Self.collapsedSize(for: edge, geometry: geometry)
+        let target = expanded ? Self.expandedSize(for: effectiveEdgeForGeometry, geometry: geometry) : Self.collapsedSize(for: effectiveEdgeForGeometry, geometry: geometry)
         currentSize = target
         presentGeneration += 1 // supersede any in-flight animated present()
         // That supersession means an in-flight present()'s own completion handler (the only other
@@ -808,19 +1280,20 @@ final class NotchPanel: NSPanel {
         // forever, hiding the pill even once correctly settled back at rest.
         uiState.isAnimating = false
         // Same reasoning as `isAnimating` just above: nothing is swinging here, so nothing needs
-        // to stay suppressed. The one caller that *does* want suppression across this instant
-        // reposition (setDockEdge's "move the pill" step, between its collapse and its expand)
-        // re-asks for it on its own following `expand(suppressPhotoFlight: true)` call.
+        // to stay suppressed.
         uiState.isRepositioningEdge = false
         silhouette.setFillColor(currentSilhouetteFillColor())
-        // symmetric: !expanded — see layoutContent's own doc comment.
-        let restEnvelope = Self.restingEnvelopeSize(for: target, edge: edge, symmetric: !expanded)
-        setFrame(windowFrame(for: restEnvelope, symmetric: !expanded), display: true)
-        layoutContent(for: target, envelopeSize: restEnvelope, symmetric: !expanded)
-        let gap = expanded ? nil : Self.collapsedGap(edge: edge, geometry: geometry)
+        // symmetric: !expanded — see layoutContent's own doc comment. Free placement is always
+        // symmetric, same reasoning as the animated present() completion above.
+        let symmetricNow = isFreePositioned || !expanded
+        let restEnvelope = envelopeSize(for: target, symmetric: symmetricNow)
+        let restFrame = windowFrame(for: restEnvelope, symmetric: symmetricNow, isExpanded: expanded)
+        setFrame(restFrame, display: true)
+        layoutContent(for: target, envelopeSize: restEnvelope, symmetric: symmetricNow)
+        let gap = expanded ? nil : Self.collapsedGap(edge: effectiveEdgeForGeometry, geometry: geometry)
         silhouette.resize(
             to: target, from: target, startGap: gap, targetGap: gap,
-            envelopeSize: restEnvelope, symmetric: !expanded, reduceMotion: true, completion: {}
+            envelopeSize: restEnvelope, symmetric: symmetricNow, reduceMotion: true, completion: {}
         )
     }
 
