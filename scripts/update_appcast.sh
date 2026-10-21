@@ -52,11 +52,14 @@ EOF
 
 # Inserts the new item right after the opening <channel> tag (so items stay newest-first, which
 # is Sparkle's own expected order) rather than rebuilding the whole file with an XML tool — the
-# feed's shape is simple and fixed enough that this is the lower-risk option.
-awk -v item="$NEW_ITEM" '
-  { print }
-  /<channel>/ && !done { print item; done = 1 }
-' appcast.xml > appcast.xml.tmp
+# feed's shape is simple and fixed enough that this is the lower-risk option. `sed`'s `r` command
+# reads a whole file in as a block, unlike `awk -v`'s `-v` assignment: BSD awk (macOS, the same
+# runner this runs on) rejects a multi-line string passed that way with "newline in string" —
+# confirmed by v0.1.3's own failed run — so the new item goes to a temp file first instead.
+ITEM_FILE="$(mktemp)"
+printf '%s\n' "$NEW_ITEM" > "$ITEM_FILE"
+sed "/<channel>/r $ITEM_FILE" appcast.xml > appcast.xml.tmp
 mv appcast.xml.tmp appcast.xml
+rm -f "$ITEM_FILE"
 
 echo "Updated appcast.xml with ${VERSION}"
