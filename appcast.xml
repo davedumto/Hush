@@ -5,6 +5,14 @@
      prepends a new <item> and commits this file back to main. -->
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
+    <item>
+      <title>Hush 0.1.4</title>
+      <pubDate>Wed, 21 Oct 2026 23:45:14 +0000</pubDate>
+      <sparkle:version>0.1.4</sparkle:version>
+      <sparkle:shortVersionString>0.1.4</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/davedumto/Hush/releases/download/v0.1.4/Hush-0.1.4.dmg" sparkle:edSignature="+r8HvOQOx88WgEeP55ZjFTqzRuBbLpo4wValUyCK5UJ02GeO8gvs9XriGE5R8o9Psiu9600IJdlnYpH/rDMaDA==" length="3883935" type="application/octet-stream" />
+    </item>
     <title>Hush</title>
     <link>https://raw.githubusercontent.com/davedumto/Hush/main/appcast.xml</link>
     <description>Hush release updates</description>
