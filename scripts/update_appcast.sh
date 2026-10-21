@@ -28,11 +28,13 @@ if [ ! -x "$SPARKLE_TOOLS_DIR/bin/sign_update" ]; then
   rm -f /tmp/sparkle.tar.xz
 fi
 
-# sign_update's `-s -` reads the private key from stdin rather than the keychain or a file —
-# nothing touches disk.
-SIGNATURE_LINE="$(printf '%s' "$SPARKLE_PRIVATE_KEY" | "$SPARKLE_TOOLS_DIR/bin/sign_update" "$DMG_PATH" -s -)"
-# sign_update prints `sparkle:edSignature="..." length="..."` — exactly the two attributes the
-# <enclosure> element needs, so this is inserted verbatim rather than re-parsed apart.
+# `-s <key>`/`-s -` is deprecated and, per `sign_update --help`, "no longer supported for newly
+# generated keys" — it fails outright (confirmed: v0.1.2's release run died here with no other
+# output). `--ed-key-file -` is the documented replacement for feeding the key over stdin without
+# touching disk; `-p` prints just the bare signature (not wrapped in a `sparkle:edSignature="..."`
+# attribute), so `length` is built separately below instead of relying on sign_update's own
+# attribute-string output.
+SIGNATURE="$(printf '%s' "$SPARKLE_PRIVATE_KEY" | "$SPARKLE_TOOLS_DIR/bin/sign_update" "$DMG_PATH" --ed-key-file - -p)"
 LENGTH="$(stat -f%z "$DMG_PATH")"
 PUB_DATE="$(LC_ALL=en_US.UTF-8 date -u "+%a, %d %b %Y %H:%M:%S +0000")"
 
@@ -43,7 +45,7 @@ NEW_ITEM=$(cat <<EOF
       <sparkle:version>${VERSION}</sparkle:version>
       <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-      <enclosure url="${DOWNLOAD_URL}" ${SIGNATURE_LINE} length="${LENGTH}" type="application/octet-stream" />
+      <enclosure url="${DOWNLOAD_URL}" sparkle:edSignature="${SIGNATURE}" length="${LENGTH}" type="application/octet-stream" />
     </item>
 EOF
 )
