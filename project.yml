@@ -3,6 +3,10 @@ options:
   bundleIdPrefix: com.davidejere
   deploymentTarget:
     macOS: "14.0"
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.10.0
 targets:
   JBLCompanion:
     type: application
@@ -34,6 +38,16 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSUIElement: true
         NSBluetoothAlwaysUsageDescription: "Hush connects to your headphones and lets you control your JBL headphones from the menu bar."
+        # Sparkle auto-update (AppDelegate's updaterController). The feed is appcast.xml served
+        # raw off main (no separate hosting needed) — release.yml regenerates and commits it on
+        # every tagged release. SUPublicEDKey is the public half of a key pair generated with
+        # Sparkle's own `generate_keys` tool; it verifies update signatures and is not secret by
+        # design — only the private half (used by release.yml via the SPARKLE_PRIVATE_KEY repo
+        # secret to sign each release) needs to stay out of the repo.
+        SUFeedURL: "https://raw.githubusercontent.com/davedumto/Hush/main/appcast.xml"
+        SUPublicEDKey: "MGskS+M9sgWfozWHrbi+X1gLBETUz4rA1zqg8+dz0+M="
+        SUEnableAutomaticChecks: true
+        SUScheduledCheckInterval: 86400
         # design/DESIGN_GUIDE.md §2: fonts live in JBLCompanion/Fonts, copied into
         # Contents/Resources/Fonts (the folder-reference source above preserves the subfolder) and
         # registered process-wide from there at launch — no TTF needs its own Info.plist entry.
@@ -60,6 +74,8 @@ targets:
         ENABLE_HARDENED_RUNTIME: NO
         ENABLE_APP_SANDBOX: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - package: Sparkle
   JBLCompanionTests:
     type: bundle.unit-test
     platform: macOS

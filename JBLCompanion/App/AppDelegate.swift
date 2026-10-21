@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import Sparkle
 import SwiftUI
 import os.log
 
@@ -50,6 +51,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// toggleFallbackPopover() show, not reused, so DEBUG's test-frame list and "Show Hush"'s
     /// checkmark are never stale the way the old menuWillOpen(_:) rebuild had to guard against.
     private var fallbackPopover: NSPopover?
+    /// Reads SUFeedURL/SUPublicEDKey straight from Info.plist (project.yml's own properties) —
+    /// `startingUpdater: true` begins Sparkle's own background schedule immediately
+    /// (SUEnableAutomaticChecks/SUScheduledCheckInterval, also in Info.plist), independent of
+    /// whether the user ever opens "Check for Updates…" themselves.
+    private lazy var updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
     /// Island Settings/FeedbackView are real restorable `Window` scenes (JBLCompanionApp.swift),
     /// so macOS's own window-state restoration reopens whichever one was left open the moment the
@@ -76,6 +82,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #endif
 
         verifyRequiredFonts()
+
+        // Forces the lazy updaterController to actually init here, at launch — otherwise it
+        // would stay uninitialized (and Sparkle's background schedule with it) until the first
+        // time someone opens the dropdown and its "Check for Updates…" row is first read.
+        _ = updaterController
 
         // Created first, before anything else in this method that could fail — a plain AppKit
         // NSStatusItem is about as close to guaranteed-to-work as menu bar UI gets. This is now
@@ -245,6 +256,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Called by FallbackMenuView's "Quit" row.
     func quitApp() {
         NSApplication.shared.terminate(nil)
+    }
+
+    /// Called by FallbackMenuView's "Check for Updates…" row. Sparkle shows its own UI for the
+    /// rest of the flow (found/not-found/downloading/install prompt) — nothing else to do here.
+    func checkForUpdates() {
+        updaterController.checkForUpdates(nil)
+    }
+
+    /// Whether to show "Check for Updates…" at all — Sparkle's own recommended guard, since a
+    /// manual check while one is already in progress (including the automatic background one)
+    /// would either queue confusingly or silently no-op.
+    var canCheckForUpdates: Bool {
+        updaterController.updater.canCheckForUpdates
     }
 
     func setNotchVisible(_ visible: Bool) {

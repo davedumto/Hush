@@ -1,0 +1,60 @@
+#!/bin/bash
+# Signs a built DMG with Sparkle's EdDSA key and prepends a matching <item> to appcast.xml.
+# Run from CI only (release.yml) right after scripts/build_dmg.sh — needs SPARKLE_PRIVATE_KEY in
+# the environment (the private half of the key pair generate_keys produced; the public half lives
+# in project.yml's SUPublicEDKey, not a secret). Never run this with a key you haven't put in the
+# SPARKLE_PRIVATE_KEY GitHub Actions secret — it is never written to disk here, only piped
+# straight into sign_update's stdin.
+#
+# Usage: scripts/update_appcast.sh <version> <dmg_path> <download_url>
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+VERSION="$1"
+DMG_PATH="$2"
+DOWNLOAD_URL="$3"
+
+if [ -z "${SPARKLE_PRIVATE_KEY:-}" ]; then
+  echo "error: SPARKLE_PRIVATE_KEY is not set" >&2
+  exit 1
+fi
+
+SPARKLE_TOOLS_DIR="$(pwd)/.sparkle-tools"
+if [ ! -x "$SPARKLE_TOOLS_DIR/bin/sign_update" ]; then
+  mkdir -p "$SPARKLE_TOOLS_DIR"
+  curl -sL -o /tmp/sparkle.tar.xz https://github.com/sparkle-project/Sparkle/releases/download/2.10.0/Sparkle-2.10.0.tar.xz
+  tar -xf /tmp/sparkle.tar.xz -C "$SPARKLE_TOOLS_DIR"
+  rm -f /tmp/sparkle.tar.xz
+fi
+
+# sign_update's `-s -` reads the private key from stdin rather than the keychain or a file —
+# nothing touches disk.
+SIGNATURE_LINE="$(printf '%s' "$SPARKLE_PRIVATE_KEY" | "$SPARKLE_TOOLS_DIR/bin/sign_update" "$DMG_PATH" -s -)"
+# sign_update prints `sparkle:edSignature="..." length="..."` — exactly the two attributes the
+# <enclosure> element needs, so this is inserted verbatim rather than re-parsed apart.
+LENGTH="$(stat -f%z "$DMG_PATH")"
+PUB_DATE="$(LC_ALL=en_US.UTF-8 date -u "+%a, %d %b %Y %H:%M:%S +0000")"
+
+NEW_ITEM=$(cat <<EOF
+    <item>
+      <title>Hush ${VERSION}</title>
+      <pubDate>${PUB_DATE}</pubDate>
+      <sparkle:version>${VERSION}</sparkle:version>
+      <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <enclosure url="${DOWNLOAD_URL}" ${SIGNATURE_LINE} length="${LENGTH}" type="application/octet-stream" />
+    </item>
+EOF
+)
+
+# Inserts the new item right after the opening <channel> tag (so items stay newest-first, which
+# is Sparkle's own expected order) rather than rebuilding the whole file with an XML tool — the
+# feed's shape is simple and fixed enough that this is the lower-risk option.
+awk -v item="$NEW_ITEM" '
+  { print }
+  /<channel>/ && !done { print item; done = 1 }
+' appcast.xml > appcast.xml.tmp
+mv appcast.xml.tmp appcast.xml
+
+echo "Updated appcast.xml with ${VERSION}"

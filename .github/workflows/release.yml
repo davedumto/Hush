@@ -37,3 +37,21 @@ jobs:
           gh release create "$GITHUB_REF_NAME" "Hush-${VERSION}.dmg" \
             --title "Hush $VERSION" \
             --generate-notes
+
+      # Sparkle auto-update: signs the just-published DMG and prepends a matching <item> to
+      # appcast.xml (AppDelegate's SUFeedURL, served raw off main), then commits that one file
+      # straight back to main. Runs after the release is published, not before, so the download
+      # URL below is guaranteed to already resolve by the time any running Hush checks for
+      # updates and sees this new appcast entry.
+      - name: Update appcast.xml
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          scripts/update_appcast.sh "$VERSION" "Hush-${VERSION}.dmg" \
+            "https://github.com/davedumto/Hush/releases/download/${GITHUB_REF_NAME}/Hush-${VERSION}.dmg"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add appcast.xml
+          git commit -m "chore: update appcast.xml for ${GITHUB_REF_NAME}"
+          git push origin HEAD:main

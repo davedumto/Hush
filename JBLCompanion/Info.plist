@@ -28,5 +28,13 @@
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Hush connects to your headphones and lets you control your JBL headphones from the menu bar.</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/davedumto/Hush/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>MGskS+M9sgWfozWHrbi+X1gLBETUz4rA1zqg8+dz0+M=</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
 </dict>
 </plist>

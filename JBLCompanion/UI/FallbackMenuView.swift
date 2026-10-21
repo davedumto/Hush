@@ -42,6 +42,13 @@ struct FallbackMenuView: View {
                 dismiss()
             }
 
+            if appDelegate.canCheckForUpdates {
+                row("Check for Updates…") {
+                    appDelegate.checkForUpdates()
+                    dismiss()
+                }
+            }
+
             #if DEBUG
             if !appDelegate.debugTestableModes.isEmpty {
                 Text("DEBUG".uppercased())
