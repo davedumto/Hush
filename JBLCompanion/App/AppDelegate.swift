@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import SwiftUI
 import os.log
 
 /// Bundles the per-connection objects (write guard, BLE battery link, RFCOMM RACE link, noise
@@ -43,16 +44,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var activeSession: ActiveDeviceSession?
     private var panel: NotchPanel?
     private var fallbackStatusItem: NSStatusItem?
-    /// Checkmark state refreshed in menuWillOpen(_:) — stored rather than looked up by title
-    /// (NSMenu.item(withTitle:)), which would silently break again the next time this item's
-    /// title text changes.
-    private var showHushMenuItem: NSMenuItem?
-    #if DEBUG
-    /// Its submenu is rebuilt fresh in menuWillOpen(_:) each time the fallback menu opens, from
-    /// debugTestableModes — the item itself is created once and just hidden when there's nothing
-    /// to test, rather than inserting/removing it from the main menu's own item list.
-    private var debugMenuItem: NSMenuItem?
-    #endif
+    /// Replaces the old native NSMenu — an NSPopover draws its own rounded-rect-with-arrow chrome
+    /// pointing at the status item (the look FallbackMenuView's own doc comment references),
+    /// which a plain NSMenu can't do. Its content view is rebuilt fresh on every
+    /// toggleFallbackPopover() show, not reused, so DEBUG's test-frame list and "Show Hush"'s
+    /// checkmark are never stale the way the old menuWillOpen(_:) rebuild had to guard against.
+    private var fallbackPopover: NSPopover?
+
+    /// Island Settings/FeedbackView are real restorable `Window` scenes (JBLCompanionApp.swift),
+    /// so macOS's own window-state restoration reopens whichever one was left open the moment the
+    /// process last exited — which happens on *every* Xcode rebuild (Xcode kills the running
+    /// process), making a utility window someone had open for testing silently pop back open on
+    /// the next launch. There's nothing in this menu bar app worth restoring across launches, so
+    /// this opts the whole app out rather than fighting restoration per-window.
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { false }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // The unit test target hosts this app (required for @testable import to resolve symbols
@@ -98,6 +103,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         logger.info("JBLCompanion launched; watching for: \(self.profiles.map(\.displayName).joined(separator: ", "), privacy: .public)")
     }
 
+    /// The app's only SwiftUI Scene is the Island Settings `Window` (JBLCompanionApp.swift) — with
+    /// no override here, AppKit's default behavior for an app whose last window just closed is to
+    /// terminate it, which quit the whole menu bar app (notch panel included) every time Island
+    /// Settings was closed. This is a menu bar/agent app (LSUIElement) with no main window at all;
+    /// it should keep running with no windows open, same as it does before Island Settings is ever
+    /// opened for the first time.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
     /// RequiredFonts.postScriptNames (design/DESIGN_GUIDE.md §2) should already be registered via
     /// ATSApplicationFontsPath (project.yml) by the time this runs — this only verifies that
     /// actually happened and logs a warning per name that didn't resolve, rather than silently
@@ -116,49 +129,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         fallbackStatusItem = item
         updateMenuBarIcon() // reflects the real (disconnected) state immediately, not the SF Symbol placeholder it replaces.
 
-        let menu = NSMenu()
-        menu.delegate = self
+        // Both left and right click show the dropdown — the island itself is what toggles on
+        // click (NotchPanel's own tap handler), not the menu bar icon. sendAction(on:) opts into
+        // right-click too, since a plain `action` alone only fires on left click.
+        item.button?.target = self
+        item.button?.action = #selector(toggleFallbackPopover)
+        item.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
 
-        let islandSettingsItem = NSMenuItem(title: "Island Settings…", action: #selector(openIslandSettingsFromFallback), keyEquivalent: "")
-        islandSettingsItem.target = self
-        menu.addItem(islandSettingsItem)
-
-        menu.addItem(.separator())
-
-        let showHushItem = NSMenuItem(title: "Show Hush", action: #selector(toggleShowHushFromFallback), keyEquivalent: "")
-        showHushItem.target = self
-        menu.addItem(showHushItem)
-        showHushMenuItem = showHushItem
-
-        let resetPositionItem = NSMenuItem(title: "Reset Position & Display", action: #selector(resetPositionFromFallback), keyEquivalent: "")
-        resetPositionItem.target = self
-        menu.addItem(resetPositionItem)
-
-        menu.addItem(.separator())
-
-        let copyDiagnosticsItem = NSMenuItem(title: "Copy Diagnostics", action: #selector(copyDiagnosticsFromFallback), keyEquivalent: "")
-        copyDiagnosticsItem.target = self
-        menu.addItem(copyDiagnosticsItem)
-
-        #if DEBUG
-        // Created once, hidden/shown and its submenu rebuilt in menuWillOpen(_:) — never
-        // inserted/removed from the main menu's own item list (see `debugMenuItem`'s own doc
-        // comment).
-        menu.addItem(.separator())
-        let debugItem = NSMenuItem(title: "Debug", action: nil, keyEquivalent: "")
-        debugItem.submenu = NSMenu()
-        menu.addItem(debugItem)
-        debugMenuItem = debugItem
-        #endif
-
-        menu.addItem(.separator())
-
-        let quitItem = NSMenuItem(title: "Quit", action: #selector(quitFromFallback), keyEquivalent: "q")
-        quitItem.target = self
-        menu.addItem(quitItem)
-
-        item.menu = menu
+        // NSPopover's own `.transient` auto-close only fires on an outside click — switching
+        // Space (Mission Control, a 3-finger swipe, Ctrl+arrow) or activating a different app
+        // triggers neither, so the popover's window (not configured to join every Space, unlike
+        // NotchPanel's own window) was staying open and stuck on whichever Space it was opened
+        // on: invisible after switching away, still sitting there if you switched back. Closing
+        // it explicitly on both makes it behave like every other menu bar dropdown in macOS.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(closeFallbackPopover),
+            name: NSWorkspace.activeSpaceDidChangeNotification, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(closeFallbackPopover),
+            name: NSApplication.didResignActiveNotification, object: nil
+        )
         logger.info("Fallback NSStatusItem created")
+    }
+
+    @objc private func closeFallbackPopover() {
+        fallbackPopover?.performClose(nil)
+    }
+
+    /// Rebuilds FallbackMenuView fresh every time — see `fallbackPopover`'s own doc comment for
+    /// why nothing here is cached/reused across shows.
+    @objc private func toggleFallbackPopover() {
+        if let fallbackPopover, fallbackPopover.isShown {
+            fallbackPopover.performClose(nil)
+            return
+        }
+        guard let button = fallbackStatusItem?.button else { return }
+
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.appearance = NSAppearance(named: .darkAqua)
+        let hostingController = NSHostingController(
+            rootView: FallbackMenuView(appDelegate: self, dismiss: { [weak popover] in popover?.performClose(nil) })
+        )
+        // Without this, NSPopover shows with its own guessed initial size (not FallbackMenuView's
+        // real, wider one), computes the arrow's position against that, then resizes once
+        // SwiftUI's actual layout reports back — leaving the arrow stranded at the old, narrower
+        // position instead of centered on the box it's now attached to (the "arrow on the side"
+        // bug). `.preferredContentSize` keeps NSPopover's contentSize synced to SwiftUI's own
+        // ideal size continuously, not just once at creation.
+        hostingController.sizingOptions = .preferredContentSize
+        popover.contentViewController = hostingController
+        fallbackPopover = popover
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
 
     // MARK: - Menu bar icon by mode (design/DESIGN_GUIDE.md §7)
@@ -198,28 +221,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func openIslandSettingsFromFallback() {
+    /// Called by FallbackMenuView — the fallback popover's own "Island Settings…" row.
+    func openIslandSettings() {
         panel?.requestOpenIslandSettings()
     }
 
-    @objc private func toggleShowHushFromFallback() {
-        let current = UserDefaults.standard.object(forKey: "showNotchCircle") as? Bool ?? true
-        let newValue = !current
-        UserDefaults.standard.set(newValue, forKey: "showNotchCircle")
-        setNotchVisible(newValue)
-    }
-
-    @objc private func resetPositionFromFallback() {
-        panel?.resetToDefaultDisplay()
-    }
-
-    @objc private func copyDiagnosticsFromFallback() {
+    /// Called by FallbackMenuView's "Copy Diagnostics" row.
+    func copyDiagnostics() {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(diagnosticsText(), forType: .string)
     }
 
-    @objc private func quitFromFallback() {
+    /// Opens the in-app feedback form (FeedbackView), which posts to the hush-feedback backend —
+    /// not GitHub. Goes through NotchPanel.requestOpenFeedback() for the same reason
+    /// requestOpenIslandSettings() does (AppDelegate has no SwiftUI environment of its own to call
+    /// `openWindow` from directly — see that method's own doc comment). Called by
+    /// FallbackMenuView's "Report a Bug / Suggest a Feature…" row.
+    func reportBug() {
+        panel?.requestOpenFeedback()
+    }
+
+    /// Called by FallbackMenuView's "Quit" row.
+    func quitApp() {
         NSApplication.shared.terminate(nil)
     }
 
@@ -240,23 +264,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    var currentDockEdge: DockEdge {
-        panel?.currentEdge ?? .top
-    }
-
-    /// Island Settings' edge picker. Same next-run-loop-turn deferral as `notchSettingsDidChange`
-    /// and for the same reason — this fires from inside the Picker's own onChange while it's
-    /// still mid-click.
-    func setDockEdge(_ edge: DockEdge) {
-        DispatchQueue.main.async { [weak self] in
-            self?.panel?.setDockEdge(edge)
-        }
-    }
-
     /// Whether `mode`'s command frame is independently verified — the segmented control and the
     /// menu bar dropdown both gate on this, not just on link readiness, since an unverified
     /// command frame could be sending something other than what it's labeled. False whenever no
     /// profile is actively connected.
+    /// For the feedback form's device-context fields — read-only, never touches the headphones.
+    var currentProfileDisplayName: String? {
+        activeSession?.profile.displayName
+    }
+
+    /// Whichever `MenuBar*` template image the status item is currently showing (see
+    /// MenuBarIconResolver) — read by FallbackMenuView's own header, so the dropdown leads with
+    /// the exact same monochrome glyph the menu bar itself shows, not the full-color AppIcon.
+    var currentMenuBarIcon: NSImage? {
+        fallbackStatusItem?.button?.image
+    }
+
     func isModeVerified(_ mode: CommandableNoiseMode) -> Bool {
         activeSession?.profile.isModeVerified(mode) ?? false
     }
@@ -291,8 +314,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Plain AppKit, not Bluetooth — opens System Settings' Bluetooth pane.
+    ///
+    /// `com.apple.preference.bluetooth` was the old System Preferences (pre-Ventura) pane
+    /// identifier — System Settings replaced it with `com.apple.BluetoothSettings`, and the old
+    /// one no longer resolves to anything specific, so it silently fell back to System Settings'
+    /// own General pane instead of Bluetooth. Not formally documented by Apple; confirmed against
+    /// the identifiers System Settings' own binary actually exposes, not guessed.
     func openBluetoothSettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.bluetooth") else { return }
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.BluetoothSettings") else { return }
         NSWorkspace.shared.open(url)
     }
 
@@ -433,47 +462,6 @@ extension AppDelegate: BLEBatteryLinkDelegate {
         headphoneState.batteryPercent = nil
         headphoneState.batteryPercentIsUnverifiedZero = false
     }
-}
-
-extension AppDelegate: NSMenuDelegate {
-    /// Refreshes the fallback menu's "Show Hush" checkmark, and (DEBUG only) rebuilds the "Debug"
-    /// submenu's "Send test frame…" items from whichever modes the currently active profile has
-    /// verified, right before the menu opens — simpler than trying to keep either in sync after
-    /// every change elsewhere (a profile match, a toggle from some other surface).
-    func menuWillOpen(_ menu: NSMenu) {
-        guard menu === fallbackStatusItem?.menu else { return }
-        let showing = UserDefaults.standard.object(forKey: "showNotchCircle") as? Bool ?? true
-        showHushMenuItem?.state = showing ? .on : .off
-        #if DEBUG
-        rebuildDebugTestFrameSubmenu()
-        #endif
-    }
-
-    #if DEBUG
-    /// `debugMenuItem` and its submenu are created once in setupFallbackStatusItem() and never
-    /// touch the main menu's own item list again — only hidden when there's nothing to test, and
-    /// its submenu's contents replaced, so switching profiles (or losing the connection entirely)
-    /// never leaves a stale mode's item behind.
-    private func rebuildDebugTestFrameSubmenu() {
-        guard let submenu = debugMenuItem?.submenu else { return }
-        debugMenuItem?.isHidden = debugTestableModes.isEmpty
-        submenu.removeAllItems()
-        for mode in debugTestableModes {
-            let item = NSMenuItem(
-                title: "Send test frame: \(mode.displayText)", action: #selector(sendDebugTestFrameFromFallback(_:)), keyEquivalent: ""
-            )
-            item.target = self
-            item.representedObject = mode
-            item.isEnabled = headphoneState.pendingNoiseMode == nil
-            submenu.addItem(item)
-        }
-    }
-
-    @objc private func sendDebugTestFrameFromFallback(_ sender: NSMenuItem) {
-        guard let mode = sender.representedObject as? CommandableNoiseMode else { return }
-        sendDebugTestFrame(mode)
-    }
-    #endif
 }
 
 extension AppDelegate: RFCOMMRaceLinkDelegate {

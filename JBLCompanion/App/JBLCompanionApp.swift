@@ -26,5 +26,13 @@ struct JBLCompanionApp: App {
             IslandSettingsView(appDelegate: appDelegate)
         }
         .windowResizability(.contentSize)
+
+        // Opened via the fallback menu's "Report a Bug / Suggest a Feature…" item — see
+        // NotchPanel.requestOpenFeedback()'s own doc comment for why it goes through a token
+        // instead of calling openWindow directly.
+        Window("Report a Bug / Suggest a Feature", id: FeedbackView.windowID) {
+            FeedbackView(appDelegate: appDelegate)
+        }
+        .windowResizability(.contentSize)
     }
 }
