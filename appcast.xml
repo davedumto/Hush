@@ -6,6 +6,14 @@
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
     <item>
+      <title>Hush 0.2.3</title>
+      <pubDate>Thu, 22 Oct 2026 07:03:52 +0000</pubDate>
+      <sparkle:version>20261022070247</sparkle:version>
+      <sparkle:shortVersionString>0.2.3</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/davedumto/Hush/releases/download/v0.2.3/Hush-0.2.3.dmg" sparkle:edSignature="fFUttgUpHOzlRuibr790srYmTCxTP5UxqAn1i7oxlxRf1Mgd9BQ5GiQxdfqM9dD0ow0XcNoZBA06a9vWxvofDg==" length="4134698" type="application/octet-stream" />
+    </item>
+    <item>
       <title>Hush 0.2.2</title>
       <pubDate>Thu, 22 Oct 2026 06:50:48 +0000</pubDate>
       <sparkle:version>20261022065001</sparkle:version>
