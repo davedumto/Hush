@@ -38,6 +38,12 @@ xcodebuild \
   CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
   clean build
 
+# scripts/update_appcast.sh reads this to put the SAME build number in the feed's
+# <sparkle:version> — that element is what Sparkle actually compares against the installed app's
+# CFBundleVersion (sparkle:shortVersionString is display-only). Written outside BUILD_DIR/
+# STAGING_DIR so it survives this script's own rm -rf of those.
+echo -n "$BUILD_NUMBER" > "$(pwd)/.sparkle-build-number"
+
 APP_PATH="$BUILD_DIR/Build/Products/Release/${APP_NAME}.app"
 if [ ! -d "$APP_PATH" ]; then
   echo "error: expected app bundle not found at $APP_PATH" >&2

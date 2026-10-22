@@ -5,6 +5,7 @@ DerivedData/
 build/
 .release-build/
 .dmg-staging/
+.sparkle-build-number
 *.dmg
 
 # PacketLogger/recon capture artifacts — scratch data for reverse-engineering RACE frames, not

@@ -15,6 +15,15 @@ VERSION="$1"
 DMG_PATH="$2"
 DOWNLOAD_URL="$3"
 
+# scripts/build_dmg.sh writes the actual CFBundleVersion it stamped the build with here.
+# <sparkle:version> below must match that exactly — it's what Sparkle's update check compares
+# against the installed app's own CFBundleVersion, not MARKETING_VERSION/VERSION above (that's
+# only <sparkle:shortVersionString>, for display). Falls back to VERSION for a manual/local run
+# that skipped build_dmg.sh, though that would reintroduce the same comparison bug this exists to
+# fix, so CI should never actually hit this fallback.
+BUILD_NUMBER_FILE="$(pwd)/.sparkle-build-number"
+BUILD_NUMBER="$([ -f "$BUILD_NUMBER_FILE" ] && cat "$BUILD_NUMBER_FILE" || echo "$VERSION")"
+
 if [ -z "${SPARKLE_PRIVATE_KEY:-}" ]; then
   echo "error: SPARKLE_PRIVATE_KEY is not set" >&2
   exit 1
@@ -42,7 +51,7 @@ NEW_ITEM=$(cat <<EOF
     <item>
       <title>Hush ${VERSION}</title>
       <pubDate>${PUB_DATE}</pubDate>
-      <sparkle:version>${VERSION}</sparkle:version>
+      <sparkle:version>${BUILD_NUMBER}</sparkle:version>
       <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
       <enclosure url="${DOWNLOAD_URL}" sparkle:edSignature="${SIGNATURE}" length="${LENGTH}" type="application/octet-stream" />
@@ -62,4 +71,6 @@ sed "/<channel>/r $ITEM_FILE" appcast.xml > appcast.xml.tmp
 mv appcast.xml.tmp appcast.xml
 rm -f "$ITEM_FILE"
 
-echo "Updated appcast.xml with ${VERSION}"
+rm -f "$BUILD_NUMBER_FILE"
+
+echo "Updated appcast.xml with ${VERSION} (build ${BUILD_NUMBER})"
