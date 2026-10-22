@@ -21,10 +21,23 @@ struct JBLCompanionApp: App {
         // Opened via the fallback menu's "Report a Bug / Suggest a Feature…" item — see
         // NotchPanel.requestOpenFeedback()'s own doc comment for why it goes through a token
         // instead of calling openWindow directly.
+        // Owner-reported: this window kept opening on every launch. The actual cause: SwiftUI
+        // auto-presents a `Window` scene at launch by default unless told not to — true for ANY
+        // app's only/first declared Scene, nothing to do with window-restoration state (the
+        // NSQuitAlwaysKeepsWindows/isRestorable attempts before this one were both treating the
+        // wrong mechanism). Before Island Settings' own Window was removed in favor of the in-tray
+        // sheet, ITS Window was the app's first scene and exhibited this same behavior; removing
+        // it just made this one the new "only scene," so it inherited the default-launch-open
+        // behavior instead. `.defaultLaunchBehavior(.suppressed)` (macOS 14+) is Apple's own
+        // documented opt-out for exactly this: an auxiliary window that should only ever appear
+        // when explicitly requested (openWindow via NotchPanel.requestOpenFeedback's own token),
+        // never automatically.
         Window("Report a Bug / Suggest a Feature", id: FeedbackView.windowID) {
             FeedbackView(appDelegate: appDelegate)
+                .background(WindowAccessor { $0.isRestorable = false })
         }
         .windowResizability(.contentSize)
+        .defaultLaunchBehavior(.suppressed)
 
         // No separate Equalizer window (there used to be one) — owner request, 2026-10-22: "I do
         // not want to be opening all those windows." EqualizerControls is embedded directly in

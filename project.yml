@@ -2,7 +2,10 @@ name: JBLCompanion
 options:
   bundleIdPrefix: com.davidejere
   deploymentTarget:
-    macOS: "14.0"
+    # Needs 15.0 for Scene's `defaultLaunchBehavior` (JBLCompanionApp's own doc comment on why —
+    # the actual fix for the Feedback window auto-opening on every launch). Early beta,
+    # single-developer testing, no real installs on anything older to worry about breaking.
+    macOS: "15.0"
 packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
