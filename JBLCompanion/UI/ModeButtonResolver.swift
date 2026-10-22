@@ -107,6 +107,16 @@ enum ModeButtonResolver {
         guard currentMode != .unknown else {
             return StatusLineContent(dotStyle: .stillRing, modeName: currentMode.displayText, detail: "")
         }
+        // Owner-reported: "Off is currently active" reads oddly — "Off" isn't really a mode you're
+        // "in," it's noise control being switched off. "Ambient Sound Control" (bold) + "is off"
+        // matches how the real JBL app itself names this toggle.
+        if currentMode == .off {
+            return StatusLineContent(
+                dotStyle: eventMapVerified ? .solidGlow : .stillRing,
+                modeName: "Ambient Sound Control",
+                detail: eventMapVerified ? "is off" : "(unverified)"
+            )
+        }
         return StatusLineContent(
             dotStyle: eventMapVerified ? .solidGlow : .stillRing,
             modeName: currentMode.displayText,

@@ -161,6 +161,24 @@ final class ModeButtonResolverTests: XCTestCase {
         XCTAssertEqual(content.detail, "")
     }
 
+    /// Owner-reported: "Off is currently active" reads oddly — Off isn't a mode you're "in," it's
+    /// noise control switched off. This phrasing matches the real JBL app's own naming for the
+    /// toggle.
+    func testOffStatusLineReadsAsAmbientSoundControlIsOff() {
+        let verified = ModeButtonResolver.statusLine(
+            currentMode: .off, pendingMode: nil, timedOut: false, eventMapVerified: true
+        )
+        XCTAssertEqual(verified.dotStyle, .solidGlow)
+        XCTAssertEqual(verified.modeName, "Ambient Sound Control")
+        XCTAssertEqual(verified.detail, "is off")
+
+        let unverified = ModeButtonResolver.statusLine(
+            currentMode: .off, pendingMode: nil, timedOut: false, eventMapVerified: false
+        )
+        XCTAssertEqual(unverified.modeName, "Ambient Sound Control")
+        XCTAssertEqual(unverified.detail, "(unverified)")
+    }
+
     func testPendingStatusLineIgnoresEventMapVerified() {
         // Pending is about the in-flight request, not the event map — eventMapVerified must never
         // leak into it.
