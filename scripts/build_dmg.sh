@@ -12,6 +12,14 @@ cd "$(dirname "$0")/.."
 
 APP_NAME="Hush"
 VERSION="${1:-$(sed -n 's/.*MARKETING_VERSION: "\(.*\)"/\1/p' project.yml)}"
+# Sparkle's update check compares CFBundleVersion (CURRENT_PROJECT_VERSION), not
+# CFBundleShortVersionString (MARKETING_VERSION) — project.yml's own CURRENT_PROJECT_VERSION
+# ("1") was never bumped per release, so every build ever shipped had the literal same build
+# number. Sparkle's comparator read that as "1" > "0.2.0" (component-wise: 1 > 0), so it always
+# reported "up to date" no matter what the feed actually offered — no release has ever
+# auto-updated. A UTC timestamp is a simple, always-increasing build number with no extra state
+# to track between CI runs.
+BUILD_NUMBER="$(date -u +%Y%m%d%H%M%S)"
 BUILD_DIR="$(pwd)/.release-build"
 STAGING_DIR="$(pwd)/.dmg-staging"
 DMG_PATH="$(pwd)/${APP_NAME}-${VERSION}.dmg"
@@ -27,6 +35,7 @@ xcodebuild \
   -configuration Release \
   -derivedDataPath "$BUILD_DIR" \
   MARKETING_VERSION="$VERSION" \
+  CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
   clean build
 
 APP_PATH="$BUILD_DIR/Build/Products/Release/${APP_NAME}.app"

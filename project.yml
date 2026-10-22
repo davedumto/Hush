@@ -67,6 +67,10 @@ targets:
         PRODUCT_MODULE_NAME: JBLCompanion
         PRODUCT_BUNDLE_IDENTIFIER: com.davidejere.JBLCompanion
         MARKETING_VERSION: "0.1.0"
+        # Local/debug-build fallback only — scripts/build_dmg.sh overrides this with a real
+        # increasing build number for every release build. Sparkle's update check compares THIS
+        # value (CFBundleVersion), not MARKETING_VERSION, so a release that reused "1" here would
+        # never be detected as newer than whatever the user already has installed.
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
