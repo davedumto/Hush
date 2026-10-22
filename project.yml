@@ -37,6 +37,11 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSUIElement: true
+        # Owner-reported: an auxiliary window (Feedback, or before that Island Settings) kept
+        # reopening on every launch whenever one had been left open at quit time - macOS's own
+        # window-restoration feature saving and reopening it. Hush is an accessory app; its real
+        # surface is the menu-bar tray, and no auxiliary window should ever persist across launches.
+        NSQuitAlwaysKeepsWindows: false
         NSBluetoothAlwaysUsageDescription: "Hush connects to your headphones and lets you control your JBL headphones from the menu bar."
         # Sparkle auto-update (AppDelegate's updaterController). The feed is appcast.xml served
         # raw off main (no separate hosting needed) — release.yml regenerates and commits it on
