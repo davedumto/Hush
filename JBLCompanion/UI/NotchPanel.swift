@@ -59,6 +59,16 @@ final class NotchPanel: NSPanel {
     private let onReconnectTapped: () -> Void
     private let onOpenBluetoothSettingsTapped: () -> Void
     private let lastMatchedProfileDisplayName: () -> String?
+    private let onPowerOff: () -> Void
+    private let canPowerOff: () -> Bool
+    private let canUseEqualizer: () -> Bool
+    private let onSelectEqualizerPreset: (EqualizerPreset) -> Void
+    private let onSetEqualizerOn: (Bool) -> Void
+    private let canUseMaxVolumeLimiter: () -> Bool
+    private let onSetMaxVolumeLimiter: (Bool) -> Void
+    private let canUseVoicePrompt: () -> Bool
+    private let onSetVoicePrompt: (Bool) -> Void
+    private let onIslandSettingsChanged: () -> Void
 
     private let silhouette = NotchSilhouetteView(frame: .zero)
     private var hosting: NSHostingView<NotchView>!
@@ -215,7 +225,17 @@ final class NotchPanel: NSPanel {
         supportsNoiseControl: @escaping () -> Bool,
         onReconnectTapped: @escaping () -> Void,
         onOpenBluetoothSettingsTapped: @escaping () -> Void,
-        lastMatchedProfileDisplayName: @escaping () -> String?
+        lastMatchedProfileDisplayName: @escaping () -> String?,
+        onPowerOff: @escaping () -> Void,
+        canPowerOff: @escaping () -> Bool,
+        canUseEqualizer: @escaping () -> Bool,
+        onSelectEqualizerPreset: @escaping (EqualizerPreset) -> Void = { _ in },
+        onSetEqualizerOn: @escaping (Bool) -> Void = { _ in },
+        canUseMaxVolumeLimiter: @escaping () -> Bool = { false },
+        onSetMaxVolumeLimiter: @escaping (Bool) -> Void = { _ in },
+        canUseVoicePrompt: @escaping () -> Bool = { false },
+        onSetVoicePrompt: @escaping (Bool) -> Void = { _ in },
+        onIslandSettingsChanged: @escaping () -> Void = {}
     ) {
         self.headphoneState = headphoneState
         self.onSelectNoiseMode = onSelectNoiseMode
@@ -224,6 +244,16 @@ final class NotchPanel: NSPanel {
         self.onReconnectTapped = onReconnectTapped
         self.onOpenBluetoothSettingsTapped = onOpenBluetoothSettingsTapped
         self.lastMatchedProfileDisplayName = lastMatchedProfileDisplayName
+        self.onPowerOff = onPowerOff
+        self.canPowerOff = canPowerOff
+        self.canUseEqualizer = canUseEqualizer
+        self.onSelectEqualizerPreset = onSelectEqualizerPreset
+        self.onSetEqualizerOn = onSetEqualizerOn
+        self.canUseMaxVolumeLimiter = canUseMaxVolumeLimiter
+        self.onSetMaxVolumeLimiter = onSetMaxVolumeLimiter
+        self.canUseVoicePrompt = canUseVoicePrompt
+        self.onSetVoicePrompt = onSetVoicePrompt
+        self.onIslandSettingsChanged = onIslandSettingsChanged
 
         let resolution = Self.resolveScreen()
         let screen = resolution.screen
@@ -294,7 +324,13 @@ final class NotchPanel: NSPanel {
                 freeFloatingNotch: { [weak self] in self?.freeFloatingNotch() },
                 onCollapseTabTapped: { [weak self] in self?.handleTabTap() },
                 onReconnectTapped: onReconnectTapped, onOpenBluetoothSettingsTapped: onOpenBluetoothSettingsTapped,
-                lastMatchedProfileDisplayName: lastMatchedProfileDisplayName
+                lastMatchedProfileDisplayName: lastMatchedProfileDisplayName,
+                onPowerOff: onPowerOff, canPowerOff: canPowerOff,
+                canUseEqualizer: canUseEqualizer,
+                onSelectEqualizerPreset: onSelectEqualizerPreset, onSetEqualizerOn: onSetEqualizerOn,
+                canUseMaxVolumeLimiter: canUseMaxVolumeLimiter, onSetMaxVolumeLimiter: onSetMaxVolumeLimiter,
+                canUseVoicePrompt: canUseVoicePrompt, onSetVoicePrompt: onSetVoicePrompt,
+                onIslandSettingsChanged: onIslandSettingsChanged
             )
         )
         // NSHostingView does not clip its own content to its frame by default. `hosting` itself
@@ -435,11 +471,23 @@ final class NotchPanel: NSPanel {
 
     var isNotched: Bool { !isFreePositioned && dockedCorner == nil && edge == .top && geometry.isNotched }
 
-    /// The fallback NSStatusItem menu's own "Island Settings…" item — see
-    /// NotchUIState.islandSettingsRequestToken's own doc comment for why it has to go through
-    /// NotchView instead of opening the window directly from here.
+    /// The fallback NSStatusItem menu's own "Island Settings…" item. Island Settings no longer has
+    /// its own window (owner request, 2026-10-22: "the external island setting is still
+    /// implemented, can you remove it... the only island setting we have is on the island") — this
+    /// expands the tray (same as a hover/click would) and bumps the token so NotchView/ExpandedCard
+    /// open straight to the in-tray Island Settings sheet, skipping the picker. See
+    /// NotchUIState.islandSettingsRequestToken's own doc comment for why a token, not a direct call.
     func requestOpenIslandSettings() {
-        uiState.islandSettingsRequestToken += 1
+        // The bump has to happen *after* the card is actually mounted (expand()'s completion, not
+        // immediately after calling it) — ExpandedCard is torn down/rebuilt on every collapse/
+        // expand cycle (StaggerIn's own doc comment), so a token change that lands before the new
+        // instance's `.onChange` subscription exists would be silently missed. expand() always
+        // calls its completion, whether it actually had to present (currently collapsed) or was
+        // already expanded (its own early-return still calls completion()), so this fires reliably
+        // either way.
+        expand { [weak self] in
+            self?.uiState.islandSettingsRequestToken += 1
+        }
     }
 
     /// The fallback NSStatusItem menu's own "Report a Bug / Suggest a Feature…" item — same

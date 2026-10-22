@@ -1,24 +1,18 @@
 import ServiceManagement
 import SwiftUI
 
-/// Island/notch tuning controls (pill size, behavior, display), broken out of the menu bar
-/// dropdown into its own window. Dock edge and distance-from-edge are set entirely by dragging
-/// the island itself now, not from here — a manual edge/margin picker here could only ever cover
-/// a subset of what dragging already does, and its "distance from edge" had no meaning at all
-/// while free-floating.
-///
-/// The dropdown is a native NSMenu (`.menu` style MenuBarExtra). `Toggle`/`Picker`/`Button` map
-/// onto native NSMenuItem equivalents there, which NSMenu handles natively — but `Stepper` has no
-/// native menu-item equivalent, so SwiftUI has to host it as a custom view inside the menu. Each
-/// tap changes an `@AppStorage` value, which rebuilds the whole menu's item list while NSMenu is
-/// still tracking that click, and that's what was closing the dropdown on every increment/
-/// decrement. A real window has no tracking session for that rebuild to interrupt, so moving the
-/// steppers (and the rest of this section, for one coherent surface) here removes the bug
-/// entirely instead of working around it.
-struct IslandSettingsView: View {
-    static let windowID = "island-settings"
-
-    let appDelegate: AppDelegate
+/// Island/notch tuning controls (pill size, behavior, display) — embedded in ExpandedCard's own
+/// in-tray settings sheet, the only place this lives now (owner request, 2026-10-22: "the external
+/// island setting is still implemented, can you remove it... the only island setting we have is on
+/// the island" — this used to also have its own standalone window, reachable both from the card's
+/// gear icon and the fallback menu bar's "Island Settings…" item; the window is gone, and the
+/// fallback menu item now opens the tray straight to this same sheet instead
+/// (NotchPanel.requestOpenIslandSettings's own doc comment)). Dock edge and distance-from-edge are
+/// set entirely by dragging the island itself, not from here — a manual edge/margin picker here
+/// could only ever cover a subset of what dragging already does, and its "distance from edge" had
+/// no meaning at all while free-floating.
+struct IslandSettingsControls: View {
+    let onSettingsChanged: () -> Void
 
     @AppStorage(IslandSettings.Key.pillDiameter) private var pillDiameter: Double = Double(DockPlacement.collapsedPillDiameter)
     @AppStorage(IslandSettings.Key.chosenDisplayUUID) private var chosenDisplayUUID: String = ""
@@ -30,30 +24,24 @@ struct IslandSettingsView: View {
     @State private var launchAtLogin: Bool = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                sectionLabel("Pill size")
-                glassRow { pillSizeRow }
+        VStack(alignment: .leading, spacing: 18) {
+            sectionLabel("Pill size")
+            glassRow { pillSizeRow }
 
-                sectionLabel("Behavior")
-                VStack(spacing: 1) {
-                    glassRow(corners: [.topLeft, .topRight], joined: true) { autoExpandRow }
-                    glassRow(corners: [.bottomLeft, .bottomRight], joined: true) { launchAtLoginRow }
-                }
-
-                sectionLabel("Display")
-                glassRow { displayRow }
+            sectionLabel("Behavior")
+            VStack(spacing: 1) {
+                glassRow(corners: [.topLeft, .topRight], joined: true) { autoExpandRow }
+                glassRow(corners: [.bottomLeft, .bottomRight], joined: true) { launchAtLoginRow }
             }
-            .padding(22)
+
+            sectionLabel("Display")
+            glassRow { displayRow }
         }
-        .frame(width: 360, height: 420)
-        .background(panelGradient)
-        .background(Theme.Semantic.cardFrame)
         .onAppear {
             launchAtLogin = SMAppService.mainApp.status == .enabled
         }
-        .onChange(of: pillDiameter) { _, _ in appDelegate.notchSettingsDidChange() }
-        .onChange(of: chosenDisplayUUID) { _, _ in appDelegate.notchSettingsDidChange() }
+        .onChange(of: pillDiameter) { _, _ in onSettingsChanged() }
+        .onChange(of: chosenDisplayUUID) { _, _ in onSettingsChanged() }
         .onChange(of: launchAtLogin) { _, newValue in
             do {
                 if newValue {
@@ -89,7 +77,7 @@ struct IslandSettingsView: View {
                 .font(Theme.Fonts.subText)
                 .foregroundStyle(Theme.Semantic.textPrimary)
             Spacer()
-            Toggle("", isOn: $autoExpandOnConnect).labelsHidden().toggleStyle(.switch).tint(Theme.Brand.orange)
+            OrangeToggle(isOn: $autoExpandOnConnect)
         }
     }
 
@@ -99,7 +87,7 @@ struct IslandSettingsView: View {
                 .font(Theme.Fonts.subText)
                 .foregroundStyle(Theme.Semantic.textPrimary)
             Spacer()
-            Toggle("", isOn: $launchAtLogin).labelsHidden().toggleStyle(.switch).tint(Theme.Brand.orange)
+            OrangeToggle(isOn: $launchAtLogin)
         }
     }
 
@@ -145,20 +133,6 @@ struct IslandSettingsView: View {
         .background(Theme.Semantic.glassFill)
         .clipShape(shape)
         .overlay(border)
-    }
-
-    /// Same radial gradient as ExpandedCard's own panel fill — design/DESIGN_GUIDE.md §4 "Panel
-    /// fill" — so this window reads as part of the same system instead of a bare macOS sheet.
-    private var panelGradient: RadialGradient {
-        RadialGradient(
-            gradient: Gradient(stops: [
-                .init(color: Theme.Semantic.panelHighlight, location: 0),
-                .init(color: Theme.Semantic.panelBase, location: 0.56),
-                .init(color: Theme.Semantic.panelEdge, location: 1),
-            ]),
-            center: UnitPoint(x: 0.5, y: 0.28),
-            startRadius: 0, endRadius: 420
-        )
     }
 }
 

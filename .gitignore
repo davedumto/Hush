@@ -6,3 +6,11 @@ build/
 .release-build/
 .dmg-staging/
 *.dmg
+
+# PacketLogger/recon capture artifacts — scratch data for reverse-engineering RACE frames, not
+# project source. Real captures live in ~/jbl-recon outside this repo; these are leftovers from
+# captures taken directly in the working directory.
+*.pklg
+equalizer-log.md
+ambient-sound-control*.txt
+new-ambient-off-capture.txt

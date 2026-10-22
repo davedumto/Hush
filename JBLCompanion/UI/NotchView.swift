@@ -83,13 +83,12 @@ final class NotchUIState {
     /// that should skip it and let the photo just fade with the rest of the card instead.
     var isRepositioningEdge: Bool = false
     /// Bumped by NotchPanel.requestOpenIslandSettings() — the fallback NSStatusItem menu's own
-    /// "Island Settings…" item. AppDelegate (plain AppKit) has no SwiftUI environment of its own
-    /// to call `openWindow` from directly, so it goes through this instead: NotchView is the one
-    /// always-mounted SwiftUI view in the whole app (see the body's own doc comment on why the
-    /// pill never leaves the tree), so it's the one place that can actually hold an
-    /// `@Environment(\.openWindow)` and act on a change here. A counter, not a Bool, so requesting
-    /// it twice in a row (the window already open, re-clicking the menu item) still fires the
-    /// `.onChange` both times instead of only the first.
+    /// "Island Settings…" item. Island Settings has no window of its own anymore (owner request,
+    /// 2026-10-22: "the only island setting we have is on the island") — NotchPanel.expand()s the
+    /// tray first, then bumps this; NotchView threads it down to ExpandedCard, which opens straight
+    /// to its own in-tray Island Settings sheet on a change. A counter, not a Bool, so requesting it
+    /// twice in a row (the tray already open, re-clicking the menu item) still re-opens the sheet
+    /// both times instead of only the first (ExpandedCard's own `.onChange` guards `newValue > 0`).
     var islandSettingsRequestToken: Int = 0
     /// Bumped by NotchPanel.requestOpenFeedback() — same pattern and same reason as
     /// islandSettingsRequestToken above.
@@ -148,11 +147,28 @@ struct NotchView: View {
     /// NotchView once at init, so a plain value read at construction time would never reflect a
     /// later UserDefaults change (AppDelegate persists this on every classic-connect match).
     let lastMatchedProfileDisplayName: () -> String?
+    /// Hardware-verified 2026-10-22 on the 670NC (DeviceProfile.powerOffCommandFrame's own doc
+    /// comment) — closures, same reasoning as onSelectNoiseMode/isModeVerified: AppDelegate owns
+    /// the real send/verification-gating logic, NotchView only threads it down to ExpandedCard.
+    let onPowerOff: () -> Void
+    let canPowerOff: () -> Bool
+    let canUseEqualizer: () -> Bool
+    /// AppDelegate.requestEqualizerPreset(_:) — same threading pattern as onSelectNoiseMode.
+    let onSelectEqualizerPreset: (EqualizerPreset) -> Void
+    /// AppDelegate.requestEqualizerOn()/requestEqualizerOff(), depending on the new toggle value.
+    let onSetEqualizerOn: (Bool) -> Void
+    let canUseMaxVolumeLimiter: () -> Bool
+    let onSetMaxVolumeLimiter: (Bool) -> Void
+    let canUseVoicePrompt: () -> Bool
+    let onSetVoicePrompt: (Bool) -> Void
+    /// AppDelegate.notchSettingsDidChange() — same callback Island Settings already triggers on
+    /// every change.
+    let onIslandSettingsChanged: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// NotchUIState.islandSettingsRequestToken's own doc comment — this is the one place in the
-    /// app that can actually call it.
+    /// Feedback still opens its own window (NotchUIState.feedbackRequestToken's own doc comment) —
+    /// this is the one place in the app that can actually hold `@Environment(\.openWindow)`.
     @Environment(\.openWindow) private var openWindow
     /// design/DESIGN_GUIDE.md §9.1 point 5 "Photo flight": owned by this common ancestor and
     /// threaded into both CollapsedPill and ExpandedCard, so `matchedGeometryEffect` can morph the
@@ -197,11 +213,6 @@ struct NotchView: View {
         // the whole swing — see NotchPanel.present()'s own doc comment on `contentLayoutSize`).
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.clear)
-        .onChange(of: uiState.islandSettingsRequestToken) { _, newValue in
-            guard newValue > 0 else { return }
-            NSApplication.shared.activate(ignoringOtherApps: true)
-            openWindow(id: IslandSettingsView.windowID)
-        }
         .onChange(of: uiState.feedbackRequestToken) { _, newValue in
             guard newValue > 0 else { return }
             NSApplication.shared.activate(ignoringOtherApps: true)
@@ -314,7 +325,13 @@ struct NotchView: View {
             isModeVerified: isModeVerified,
             supportsNoiseControl: supportsNoiseControl(), onSelectNoiseMode: onSelectNoiseMode,
             onReconnectTapped: onReconnectTapped, onOpenBluetoothSettingsTapped: onOpenBluetoothSettingsTapped,
-            lastMatchedProfileDisplayName: lastMatchedProfileDisplayName(), photoNamespace: cardPhotoNamespace
+            lastMatchedProfileDisplayName: lastMatchedProfileDisplayName(), photoNamespace: cardPhotoNamespace,
+            onPowerOff: onPowerOff, canPowerOff: canPowerOff(), canUseEqualizer: canUseEqualizer(),
+            onSelectEqualizerPreset: onSelectEqualizerPreset, onSetEqualizerOn: onSetEqualizerOn,
+            onIslandSettingsChanged: onIslandSettingsChanged,
+            canUseMaxVolumeLimiter: canUseMaxVolumeLimiter(), onSetMaxVolumeLimiter: onSetMaxVolumeLimiter,
+            canUseVoicePrompt: canUseVoicePrompt(), onSetVoicePrompt: onSetVoicePrompt,
+            openIslandSettingsRequestToken: uiState.islandSettingsRequestToken
         )
     }
 

@@ -26,10 +26,9 @@ final class FakeRaceWriteTransport: RaceWriteTransport {
     }
 }
 
-/// An allowlist permitting every commandable mode that actually has a frame (Off doesn't and never
-/// will), independent of Tune770NCProfile's current verified-mode allowlist — these tests are
-/// about transport readiness and rate-limiting, not about which modes happen to be verified right
-/// now; that's WriteGuardTests' job.
+/// An allowlist permitting every commandable mode's frame, independent of Tune770NCProfile's
+/// current verified-mode allowlist — these tests are about transport readiness and rate-limiting,
+/// not about which modes happen to be verified right now; that's WriteGuardTests' job.
 private func permissiveWriteGuard() -> WriteGuard {
     WriteGuard(allowlist: CommandableNoiseMode.allCases.compactMap { $0.commandFrame.map { WriteAllowlistEntry(payload: $0) } })
 }
@@ -60,13 +59,13 @@ final class NoiseControlCommanderTests: XCTestCase {
         XCTAssertFalse(commander.setMode(.anc))
     }
 
-    /// Off has no captured command frame at all — setMode must refuse it even when the transport
-    /// is fully ready and the write guard would allow anything, since there's nothing to send.
-    func testRefusesOffBecauseItHasNoCommandFrame() {
+    /// Off has its own captured command frame now (CommandableNoiseMode.commandFrame's own doc
+    /// comment) — setMode sends it exactly like any other mode.
+    func testSendsOffLikeAnyOtherMode() {
         let transport = FakeRaceWriteTransport(ready: true)
         let commander = makeCommander(transport: transport)
-        XCTAssertFalse(commander.setMode(.off))
-        XCTAssertTrue(transport.writtenPayloads.isEmpty)
+        XCTAssertTrue(commander.setMode(.off))
+        XCTAssertEqual(transport.writtenPayloads, [CommandableNoiseMode.off.commandFrame!])
     }
 
     func testEnforcesMinimumIntervalBetweenWrites() {
@@ -89,6 +88,51 @@ final class NoiseControlCommanderTests: XCTestCase {
         let transport = FakeRaceWriteTransport(ready: true)
         let commander = makeCommander(transport: transport)
         _ = commander.setMode(.anc)
+        XCTAssertEqual(transport.writtenPayloads.count, 1)
+    }
+}
+
+// MARK: - send(_:label:) — the generic guarded-write path setMode and power-off both share
+
+@MainActor
+final class NoiseControlCommanderSendTests: XCTestCase {
+    private let powerOffFrame = Data([0x05, 0x5A, 0x04, 0x00, 0x01, 0x11, 0x18, 0x00])
+
+    private func makeCommander(transport: FakeRaceWriteTransport, allowlist: [Data]) -> NoiseControlCommander {
+        NoiseControlCommander(writeGuard: WriteGuard(allowlist: allowlist.map { WriteAllowlistEntry(payload: $0) }), transport: transport)
+    }
+
+    func testSendGoesThroughWhenReadyAndAllowlisted() {
+        let transport = FakeRaceWriteTransport(ready: true)
+        let commander = makeCommander(transport: transport, allowlist: [powerOffFrame])
+        XCTAssertTrue(commander.send(powerOffFrame, label: "power-off"))
+        XCTAssertEqual(transport.writtenPayloads, [powerOffFrame])
+    }
+
+    func testSendRefusesWhenLinkNotReady() {
+        let transport = FakeRaceWriteTransport(ready: false)
+        let commander = makeCommander(transport: transport, allowlist: [powerOffFrame])
+        XCTAssertFalse(commander.send(powerOffFrame, label: "power-off"))
+        XCTAssertTrue(transport.writtenPayloads.isEmpty)
+    }
+
+    func testSendRefusesWhenNotAllowlisted() {
+        let transport = FakeRaceWriteTransport(ready: true)
+        let commander = makeCommander(transport: transport, allowlist: [])
+        XCTAssertFalse(commander.send(powerOffFrame, label: "power-off"))
+        XCTAssertTrue(transport.writtenPayloads.isEmpty)
+    }
+
+    func testSendSharesTheSameRateLimitAsSetMode() {
+        let transport = FakeRaceWriteTransport(ready: true)
+        var now = Date(timeIntervalSince1970: 0)
+        let commander = NoiseControlCommander(
+            writeGuard: WriteGuard(allowlist: [powerOffFrame, CommandableNoiseMode.anc.commandFrame!].map { WriteAllowlistEntry(payload: $0) }),
+            transport: transport, now: { now }
+        )
+        XCTAssertTrue(commander.setMode(.anc))
+        now = now.addingTimeInterval(0.1) // well under the 500ms minimum
+        XCTAssertFalse(commander.send(powerOffFrame, label: "power-off"))
         XCTAssertEqual(transport.writtenPayloads.count, 1)
     }
 }
@@ -242,6 +286,26 @@ final class NoiseModeRequestCoordinatorTests: XCTestCase {
         XCTAssertFalse(state.noiseModeConfirmationTimedOut)
         // Never sent a command on the device's behalf — this was the headphones telling us.
         XCTAssertTrue(sender.requestedModes.isEmpty)
+    }
+
+    /// Off has its own captured command frame now (CommandableNoiseMode.commandFrame's own doc
+    /// comment) — requesting it goes through the exact same send/pending/confirmation path as any
+    /// other mode, no special-casing.
+    func testRequestingOffGoesThroughTheNormalPendingConfirmationPath() {
+        let state = HeadphoneState()
+        state.noiseMode = .anc
+        let sender = FakeNoiseModeSending()
+        let (coordinator, _) = makeCoordinator(sender: sender, state: state)
+
+        coordinator.requestMode(.off)
+
+        XCTAssertEqual(state.noiseMode, .anc, "must stay the prior confirmed mode until a real confirmation arrives")
+        XCTAssertEqual(state.pendingNoiseMode, .off)
+        XCTAssertEqual(sender.requestedModes, [.off])
+
+        coordinator.handleConfirmation(.off)
+        XCTAssertEqual(state.noiseMode, .off)
+        XCTAssertNil(state.pendingNoiseMode)
     }
 
     func testTimeoutIsANoOpIfConfirmationAlreadyArrived() {

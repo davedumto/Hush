@@ -3,8 +3,9 @@ import os.log
 
 /// "Report a Bug / Suggest a Feature…" window, opened from the fallback menu
 /// (AppDelegate.reportBugFromFallback → NotchPanel.requestOpenFeedback() → NotchView's own
-/// openWindow call — see IslandSettingsView's doc comment for why it can't be called directly
-/// from AppDelegate). Posts to the hush-feedback backend over plain HTTPS; nothing here touches
+/// openWindow call — see NotchUIState.feedbackRequestToken's own doc comment for why it can't be
+/// called directly from AppDelegate). Posts to the hush-feedback backend over plain HTTPS; nothing
+/// here touches
 /// Bluetooth, WriteGuard, or any RFCOMM/BLE code — it only *reads* diagnostics text that already
 /// exists for "Copy Diagnostics".
 struct FeedbackView: View {

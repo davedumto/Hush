@@ -98,6 +98,38 @@ protocol DeviceProfile {
     /// label that was never independently checked. Defaults to false for every mode (see the
     /// protocol extension below) until a conformer explicitly marks one true.
     func isModeVerified(_ mode: CommandableNoiseMode) -> Bool
+
+    /// The RACE command frame that powers the headphones off remotely — captured 2026-10-22 via
+    /// PacketLogger on an iPad running the real JBL app (a BLE ATT write to the RACE write
+    /// characteristic), then independently re-verified over the classic RFCOMM bridge
+    /// (~/jbl-recon/rfcomm_send_poweroff_670nc.swift): sending it produced the documented ack
+    /// (`05 5B 03 00 01 11 00`) and the headphones genuinely powered off. Shared across models the
+    /// same way CommandableNoiseMode.commandFrame is (same Airoha chipset/RACE protocol) — nil for
+    /// a profile with no known frame at all (the protocol extension's default).
+    var powerOffCommandFrame: Data? { get }
+
+    /// Whether `powerOffCommandFrame` has been independently hardware-verified for *this exact*
+    /// model, same reasoning as `isModeVerified` — a frame captured/confirmed on one model is not
+    /// assumed to work on another until separately tested, even though both currently share the
+    /// same chipset family. Defaults to false (the protocol extension below).
+    var isPowerOffVerified: Bool { get }
+
+    /// Whether every EqualizerPreset's own `transaction` has been independently hardware-verified
+    /// for *this exact* model, same reasoning as `isPowerOffVerified` — each of the 6 presets was
+    /// captured and confirmed by ear one at a time (2026-10-22) on the 670NC specifically; nothing
+    /// has been tested on another model yet. Unlike noise mode/power-off, the preset data itself
+    /// lives on EqualizerPreset directly (not per-profile), since it's the same captured bytes for
+    /// every profile that sets this true — this flag only gates whether a profile's own
+    /// writeAllowlist includes them.
+    var isEqualizerVerified: Bool { get }
+
+    /// Whether DeviceToggle.maxVolumeLimiter's captured frames have been independently
+    /// hardware-verified for *this exact* model, same reasoning as `isEqualizerVerified`.
+    var isMaxVolumeLimiterVerified: Bool { get }
+    /// Whether DeviceToggle.voicePrompt's captured frames have been independently
+    /// hardware-verified for *this exact* model, same reasoning as `isEqualizerVerified` — see
+    /// DeviceToggle.voicePrompt's own doc comment for why this one's confirmation is weaker.
+    var isVoicePromptVerified: Bool { get }
 }
 
 extension DeviceProfile {
@@ -107,13 +139,33 @@ extension DeviceProfile {
     /// a wrong one, so this is fine as a silent default (unlike allowsRFCOMMWrites).
     var photoAssetNames: HeadphonePhotoAssetNames? { nil }
     var modelNumberText: String { "" }
+    var powerOffCommandFrame: Data? { nil }
+    var isPowerOffVerified: Bool { false }
+    var isEqualizerVerified: Bool { false }
+    var isMaxVolumeLimiterVerified: Bool { false }
+    var isVoicePromptVerified: Bool { false }
 
     /// Every CommandableNoiseMode this profile marks verified, provided it actually has a command
-    /// frame (CommandableNoiseMode.commandFrame — Off never will). compactMap is
-    /// belt-and-suspenders: isModeVerified(.off) should already be false everywhere.
+    /// frame (CommandableNoiseMode.commandFrame — Off never will), plus the power-off frame when
+    /// independently verified, plus every EqualizerPreset's own transaction frames when verified,
+    /// plus each verified DeviceToggle's own on/off frame pair.
+    /// compactMap is belt-and-suspenders: isModeVerified(.off) should already be false everywhere.
     var writeAllowlist: [WriteAllowlistEntry] {
-        CommandableNoiseMode.allCases
+        var entries = CommandableNoiseMode.allCases
             .filter { isModeVerified($0) }
             .compactMap { $0.commandFrame.map { WriteAllowlistEntry(payload: $0) } }
+        if isPowerOffVerified, let powerOffCommandFrame {
+            entries.append(WriteAllowlistEntry(payload: powerOffCommandFrame))
+        }
+        if isEqualizerVerified {
+            entries.append(contentsOf: EqualizerPreset.allCases.flatMap(\.transaction).map { WriteAllowlistEntry(payload: $0) })
+        }
+        if isMaxVolumeLimiterVerified {
+            entries.append(contentsOf: DeviceToggle.maxVolumeLimiter.bothStateFrames.map { WriteAllowlistEntry(payload: $0) })
+        }
+        if isVoicePromptVerified {
+            entries.append(contentsOf: DeviceToggle.voicePrompt.bothStateFrames.map { WriteAllowlistEntry(payload: $0) })
+        }
+        return entries
     }
 }

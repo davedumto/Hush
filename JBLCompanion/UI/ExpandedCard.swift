@@ -46,10 +46,62 @@ struct ExpandedCard: View {
     /// need the flight (most of them — matchedGeometryEffect only does anything useful when both
     /// the pill and the card are mounted in the same transition, which only NotchView arranges).
     var photoNamespace: Namespace.ID? = nil
+    /// Hardware-verified 2026-10-22 (DeviceProfile.powerOffCommandFrame's own doc comment) —
+    /// same reasoning as onSelectNoiseMode: AppDelegate owns the real send/WriteGuard/rate-limit
+    /// path, this view only calls it.
+    var onPowerOff: () -> Void = {}
+    /// DeviceProfile.isPowerOffVerified — gates `tab`'s IconPower button the same way
+    /// isModeVerified gates each mode button: unverified means disabled, not hidden, so the
+    /// control's presence doesn't silently change per model.
+    var canPowerOff: Bool = false
+    /// DeviceProfile.isEqualizerVerified's own doc comment — gates the equalizer row in the
+    /// settings picker sheet and the curve/grid inside EqualizerControls itself.
+    var canUseEqualizer: Bool = false
+    var onSelectEqualizerPreset: (EqualizerPreset) -> Void = { _ in }
+    var onSetEqualizerOn: (Bool) -> Void = { _ in }
+    /// Pushed back through to IslandSettingsControls — AppDelegate.notchSettingsDidChange(), same
+    /// callback Island Settings already triggers on every change.
+    var onIslandSettingsChanged: () -> Void = {}
+    /// DeviceToggle.maxVolumeLimiter/.voicePrompt's own doc comments — gates each row in the
+    /// Headphone Settings sheet independently (neither gates the other).
+    var canUseMaxVolumeLimiter: Bool = false
+    var onSetMaxVolumeLimiter: (Bool) -> Void = { _ in }
+    var canUseVoicePrompt: Bool = false
+    var onSetVoicePrompt: (Bool) -> Void = { _ in }
+    /// Bumped by NotchPanel.requestOpenIslandSettings() (the fallback NSStatusItem menu's own
+    /// "Island Settings…" item — NotchUIState.islandSettingsRequestToken's own doc comment) —
+    /// jumps straight to the in-tray Island Settings sheet, skipping the picker, since that's the
+    /// one sheet the menu item is asking for specifically.
+    var openIslandSettingsRequestToken: Int = 0
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.openWindow) private var openWindow
+    /// Drives the "Turn off headphones?" confirm/cancel alert (owner request, matching the real
+    /// JBL app's own confirmation popup — the capture that found this frame in the first place).
+    @State private var showingPowerOffConfirm = false
+    /// One gear icon opens a small picker (Island Settings / Equalizer); each opens its own
+    /// in-tray sheet from there (owner request, 2026-10-22: "I do not want to be opening all
+    /// those windows" — both used to be separate Windows). Mirrors `showingPowerOffConfirm`'s own
+    /// slide-up-sheet pattern, just with one more level: picker -> destination.
+    @State private var activeTraySheet: TraySheet? = nil
+
+    private enum TraySheet: Hashable {
+        case settingsPicker
+        case islandSettings
+        case equalizer
+        case headphoneSettings
+
+        var isRoot: Bool { self == .settingsPicker }
+
+        var title: String? {
+            switch self {
+            case .settingsPicker: return nil
+            case .islandSettings: return "Island Settings"
+            case .equalizer: return "Equalizer"
+            case .headphoneSettings: return "Headphone Settings"
+            }
+        }
+    }
 
     private var isVertical: Bool { dock.isVertical }
     // design/DESIGN_GUIDE.md §4: "Height follows content, about 470" — not exactly 470. Summing
@@ -98,6 +150,10 @@ struct ExpandedCard: View {
             frame
             panelContent
             tab
+            if showingPowerOffConfirm {
+                powerOffConfirmSheet
+            }
+            traySheetOverlay
         }
         .frame(width: cardSize.width, height: cardSize.height)
         // Without this, a click on any part of the card with no SwiftUI gesture of its own (the
@@ -108,6 +164,10 @@ struct ExpandedCard: View {
         // This absorbs those clicks (doing nothing) so only the tab and the real buttons respond.
         .contentShape(Rectangle())
         .onTapGesture {}
+        .onChange(of: openIslandSettingsRequestToken) { _, newValue in
+            guard newValue > 0 else { return }
+            withAnimation(powerOffSheetAnimation) { activeTraySheet = .islandSettings }
+        }
     }
 
     // MARK: - Frame + panel
@@ -333,18 +393,256 @@ struct ExpandedCard: View {
         HStack(spacing: 8) {
             topRowChip
             Spacer(minLength: 0)
-            iconButton("IconSettings", onTap: openIslandSettings)
-            iconButton("IconPower")
+            iconButton("IconSettings", onTap: openSettingsPicker)
+            iconButton(
+                "IconPower", tint: canPowerOff ? .white : .white.opacity(0.3),
+                onTap: canPowerOff ? { withAnimation(powerOffSheetAnimation) { showingPowerOffConfirm = true } } : nil
+            )
         }
     }
 
-    /// This app is an accessory (LSUIElement) with no Dock icon — without activating first, a
-    /// newly opened window can appear behind whatever app was frontmost. Same two-step sequence
-    /// as IslandSettingsMenuButton, this card's own former route to the same window before that
-    /// menu bar item was consolidated away — now this gear icon is the only route left.
-    private func openIslandSettings() {
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        openWindow(id: IslandSettingsView.windowID)
+    /// Single entry point for both Island Settings and Equalizer now (owner request, 2026-10-22:
+    /// "use the settings icon instead so it does not clash with the icon of the equalizer" —
+    /// resolved by removing the second icon entirely and routing both through one gear-triggered
+    /// picker sheet, same `.move(edge: .bottom)` pattern as `powerOffConfirmSheet`).
+    private func openSettingsPicker() {
+        withAnimation(powerOffSheetAnimation) { activeTraySheet = .settingsPicker }
+    }
+
+    /// A card-native confirm/cancel sheet (owner request), not a system `.alert` — matches the
+    /// app's own styling and the real JBL app's own confirmation popup (the capture that found
+    /// this frame in the first place). Stays entirely within the tray's own bounds (owner
+    /// request): clipped to the card's own rounded rect, not a separate screen-wide window, so it
+    /// never conflicts with "the panel must never steal focus."
+    private var powerOffConfirmSheet: some View {
+        ZStack(alignment: .bottom) {
+            // "Blur the other parts faintly" — a real Material blur (not just a dim overlay),
+            // kept faint via low opacity so the card's own content is still legible through it.
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .opacity(0.9)
+                .contentShape(Rectangle())
+                .transition(.opacity)
+                .onTapGesture { dismissPowerOffSheet() }
+
+            VStack(spacing: 14) {
+                HStack {
+                    Spacer()
+                    Button(action: dismissPowerOffSheet) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(Theme.Semantic.textSecondary)
+                            .frame(width: 22, height: 22)
+                            .background(Theme.Semantic.glassFill, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                VStack(spacing: 6) {
+                    Text("Turn off headphones?")
+                        .font(.custom("Fredoka-SemiBold", size: 17))
+                        .foregroundStyle(Theme.Semantic.textPrimary)
+                    Text("This will power off \(state.deviceName.isEmpty ? "the headphones" : state.deviceName) remotely.")
+                        .font(Theme.Fonts.subText)
+                        .foregroundStyle(Theme.Semantic.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
+
+                HStack(spacing: 10) {
+                    powerOffSheetButton("Cancel", textColor: Theme.Semantic.textPrimary, action: dismissPowerOffSheet)
+                    powerOffSheetButton("Turn Off", textColor: .red) {
+                        dismissPowerOffSheet()
+                        onPowerOff()
+                    }
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 14)
+            .padding(.bottom, 20)
+            .frame(maxWidth: .infinity)
+            .background(
+                panelGradient,
+                in: UnevenRoundedRectangle(topLeadingRadius: 27, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: 27, style: .continuous)
+            )
+            .overlay(
+                UnevenRoundedRectangle(topLeadingRadius: 27, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: 27, style: .continuous)
+                    .strokeBorder(Theme.Semantic.glassStroke, lineWidth: 1)
+            )
+            // One transition on the whole sheet (not split across inner/outer layers, which fades
+            // instead of visibly sliding — owner-reported) so open and close both genuinely slide
+            // from the bottom edge, not just cross-fade.
+            .transition(.move(edge: .bottom))
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 33, style: .continuous))
+    }
+
+    private func dismissPowerOffSheet() {
+        withAnimation(powerOffSheetAnimation) { showingPowerOffConfirm = false }
+    }
+
+    private var powerOffSheetAnimation: Animation {
+        reduceMotion ? .easeInOut(duration: 0.16) : .spring(response: 0.38, dampingFraction: 0.86)
+    }
+
+    private func powerOffSheetButton(_ title: String, textColor: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(Theme.Fonts.statusModeName)
+                .foregroundStyle(textColor)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(Theme.Semantic.glassFill, in: Capsule())
+                .overlay(Capsule().strokeBorder(Theme.Semantic.glassStroke, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// A single persistent sheet container (scrim + bottom panel) that only slides up/down on
+    /// open/close (`.move(edge: .bottom)`, nil <-> non-nil) — navigating *within* it (picker ->
+    /// destination, back) swaps `traySheetBody` instead, keyed by `.id(activeTraySheet)` so it
+    /// gets its own insert/remove diffing and genuinely animates (an `if let` alone only re-renders
+    /// in place across two non-nil values — no transition fires — which is why the owner-reported
+    /// "animation isn't active" bug was real: the picker's own open/close slid fine, but stepping
+    /// into Island Settings/Equalizer from it was a silent snap). Each destination slides in from
+    /// the trailing edge, like a push; the picker (root) slides in from leading, like a pop — a
+    /// directional "push navigation" read instead of a flat crossfade.
+    private var traySheetOverlay: some View {
+        ZStack(alignment: .bottom) {
+            if activeTraySheet != nil {
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .opacity(0.9)
+                    .contentShape(Rectangle())
+                    .transition(.opacity)
+                    .onTapGesture { dismissTraySheet() }
+
+                VStack(alignment: .leading, spacing: 14) {
+                    traySheetHeader
+                    traySheetBody
+                        .id(activeTraySheet)
+                        .transition(.move(edge: (activeTraySheet?.isRoot ?? true) ? .leading : .trailing).combined(with: .opacity))
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 14)
+                .padding(.bottom, 20)
+                .frame(maxWidth: .infinity)
+                .background(
+                    panelGradient,
+                    in: UnevenRoundedRectangle(topLeadingRadius: 27, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: 27, style: .continuous)
+                )
+                .overlay(
+                    UnevenRoundedRectangle(topLeadingRadius: 27, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: 27, style: .continuous)
+                        .strokeBorder(Theme.Semantic.glassStroke, lineWidth: 1)
+                )
+                .clipped()
+                .transition(.move(edge: .bottom))
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 33, style: .continuous))
+        // Owner-reported: open -> close -> tapping the gear again didn't reopen it. This ZStack
+        // always exists in the card's own view tree now (it's not wrapped in an outer `if` the way
+        // `powerOffConfirmSheet` is — that's what lets `traySheetBody`'s own `.id(activeTraySheet)`
+        // survive picker<->destination navigation); with `activeTraySheet == nil` its own `if`
+        // renders no children, but an empty ZStack can still claim hit-testing space over
+        // whatever's behind it (here, the gear icon in `topRow`) for the remainder of a still-
+        // settling SwiftUI transaction. This makes that explicit instead of relying on "empty means
+        // untappable," which isn't actually guaranteed.
+        .allowsHitTesting(activeTraySheet != nil)
+    }
+
+    @ViewBuilder
+    private var traySheetHeader: some View {
+        HStack(spacing: 10) {
+            if let activeTraySheet, !activeTraySheet.isRoot {
+                Button {
+                    withAnimation(powerOffSheetAnimation) { self.activeTraySheet = .settingsPicker }
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Theme.Semantic.textSecondary)
+                        .frame(width: 22, height: 22)
+                        .background(Theme.Semantic.glassFill, in: Circle())
+                }
+                .buttonStyle(.plain)
+            }
+            if let title = activeTraySheet?.title {
+                Text(title)
+                    .font(.custom("Fredoka-SemiBold", size: 17))
+                    .foregroundStyle(Theme.Semantic.textPrimary)
+            }
+            Spacer()
+            Button(action: dismissTraySheet) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Theme.Semantic.textSecondary)
+                    .frame(width: 22, height: 22)
+                    .background(Theme.Semantic.glassFill, in: Circle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    @ViewBuilder
+    private var traySheetBody: some View {
+        switch activeTraySheet {
+        case .settingsPicker, nil:
+            VStack(spacing: 10) {
+                traySheetPickerRow(title: "Island Settings", systemImage: "slider.horizontal.3") {
+                    withAnimation(powerOffSheetAnimation) { activeTraySheet = .islandSettings }
+                }
+                traySheetPickerRow(title: "Equalizer", systemImage: "waveform") {
+                    withAnimation(powerOffSheetAnimation) { activeTraySheet = .equalizer }
+                }
+                traySheetPickerRow(title: "Headphone Settings", systemImage: "gearshape.2") {
+                    withAnimation(powerOffSheetAnimation) { activeTraySheet = .headphoneSettings }
+                }
+            }
+        case .islandSettings:
+            IslandSettingsControls(onSettingsChanged: onIslandSettingsChanged)
+        case .equalizer:
+            EqualizerControls(
+                canUseEqualizer: canUseEqualizer, equalizerPreset: state.equalizerPreset, equalizerOn: state.equalizerOn,
+                onSelectPreset: onSelectEqualizerPreset, onSetOn: onSetEqualizerOn
+            )
+        case .headphoneSettings:
+            HeadphoneSettingsControls(
+                canUseMaxVolumeLimiter: canUseMaxVolumeLimiter, maxVolumeLimiterOn: state.maxVolumeLimiterOn, onSetMaxVolumeLimiter: onSetMaxVolumeLimiter,
+                canUseVoicePrompt: canUseVoicePrompt, voicePromptOn: state.voicePromptOn, onSetVoicePrompt: onSetVoicePrompt
+            )
+        }
+    }
+
+    private func dismissTraySheet() {
+        withAnimation(powerOffSheetAnimation) { activeTraySheet = nil }
+    }
+
+    /// Orange icon badge (owner-reported: "you did not make use of orange too") instead of a bare
+    /// orange glyph on glass — matches the accent-chip language the rest of the card already uses
+    /// (the hero's own orange hotspot dot/glow). Each row gets its own rounded rect and stroke
+    /// (not one joined glassRow block) so the two choices read as distinct tappable cards.
+    private func traySheetPickerRow(title: String, systemImage: String, onTap: @escaping () -> Void) -> some View {
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+                    .background(Theme.Brand.orange, in: Circle())
+                Text(title)
+                    .font(Theme.Fonts.subText)
+                    .foregroundStyle(Theme.Semantic.textPrimary)
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.Semantic.textSecondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 11)
+            .background(Theme.Semantic.glassFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Theme.Semantic.glassStroke, lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     /// §5: the top-left chip itself swaps content for "No device" and "Connecting" — otherwise
@@ -391,7 +689,7 @@ struct ExpandedCard: View {
             .background(Theme.Semantic.chipFill, in: Capsule())
     }
 
-    private func iconButton(_ assetName: String, onTap: (() -> Void)? = nil) -> some View {
+    private func iconButton(_ assetName: String, tint: Color = .white, onTap: (() -> Void)? = nil) -> some View {
         Circle()
             .strokeBorder(Theme.Semantic.glassStroke, lineWidth: 1)
             .frame(width: 28, height: 28)
@@ -401,9 +699,8 @@ struct ExpandedCard: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(width: 14, height: 14)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(tint)
             )
-            // nil (IconPower, for now) stays purely decorative, same as both always were before.
             .contentShape(Circle())
             .onTapGesture { onTap?() }
     }

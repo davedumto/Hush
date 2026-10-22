@@ -5,7 +5,7 @@ import SwiftUI
 /// not a native NSMenu. NSPopover draws its own rounded-rect-with-arrow chrome natively (the "arrow
 /// thingy pointing at the menu bar item" look), so this view only needs to fill that chrome with the
 /// app's own card styling instead of the system's plain white/dark menu background. Each row sits in
-/// its own rounded "glass" card, matching IslandSettingsView's own glassRow look (the owner's own
+/// its own rounded "glass" card, matching IslandSettingsControls's own glassRow look (the owner's own
 /// reference for this), not a flat NSMenu-style row-with-divider list. Exactly the same controls the
 /// old NSMenu had, minus "Reset Position & Display" — removed (not just restyled): with the island's
 /// position now fully user-dragged (corner dock or free-floating, see DockPlacement's own
@@ -101,7 +101,7 @@ struct FallbackMenuView: View {
     /// window keep their own brand color untouched.
     private static let accent = Color.white
 
-    /// One glass-stroked row — matches IslandSettingsView's own `glassRow`, so this dropdown
+    /// One glass-stroked row — matches IslandSettingsControls's own `glassRow`, so this dropdown
     /// reads as the same system as the rest of the app instead of a bare macOS menu. `joined`
     /// rows (the diagnostics/report pair, the DEBUG test-frame list) share a flat seam instead of
     /// each getting its own full rounded rect, matching the owner's own reference image.
@@ -156,7 +156,7 @@ private struct FallbackRowButtonStyle: ButtonStyle {
 
 /// AppKit's `UIRectCorner`/rounded-per-corner shape has no AppKit equivalent built in —
 /// `RoundedRectangle` only offers all four corners alike. Used to flatten the seam between two
-/// stacked "joined" rows, same as IslandSettingsView's own copy of this shape.
+/// stacked "joined" rows, same as IslandSettingsControls's own copy of this shape.
 private struct RoundedCorners: Shape {
     var radius: CGFloat
     var corners: UIRectCorner
@@ -183,7 +183,7 @@ private struct RoundedCorners: Shape {
 }
 
 /// Mirrors AppKit's `NSRectCorner`-adjacent flag set (there's no built-in SwiftUI equivalent) —
-/// same copy as IslandSettingsView's own private one, kept file-local rather than shared since
+/// same copy as IslandSettingsControls's own private one, kept file-local rather than shared since
 /// neither file is meant to depend on the other.
 private struct UIRectCorner: OptionSet {
     let rawValue: Int

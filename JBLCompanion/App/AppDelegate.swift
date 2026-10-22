@@ -19,6 +19,7 @@ private final class ActiveDeviceSession {
     let rfcommLink: RFCOMMRaceLink
     let noiseControlCommander: NoiseControlCommander
     let noiseModeCoordinator: NoiseModeRequestCoordinator
+    let equalizerCommander: EqualizerCommander
 
     init(profile: DeviceProfile, connectedAddress: String, addressConfirmed: Bool, state: HeadphoneState) {
         self.profile = profile
@@ -32,6 +33,7 @@ private final class ActiveDeviceSession {
         self.rfcommLink = rfcommLink
         self.noiseControlCommander = noiseControlCommander
         self.noiseModeCoordinator = NoiseModeRequestCoordinator(state: state, sender: noiseControlCommander)
+        self.equalizerCommander = EqualizerCommander(writeGuard: writeGuard, transport: rfcommLink)
     }
 }
 
@@ -104,7 +106,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             supportsNoiseControl: { [weak self] in self?.activeSession?.profile.supportsNoiseControl ?? false },
             onReconnectTapped: { [weak self] in self?.reconnect() },
             onOpenBluetoothSettingsTapped: { [weak self] in self?.openBluetoothSettings() },
-            lastMatchedProfileDisplayName: { Self.lastMatchedProfileDisplayName }
+            lastMatchedProfileDisplayName: { Self.lastMatchedProfileDisplayName },
+            onPowerOff: { [weak self] in self?.requestPowerOff() },
+            canPowerOff: { [weak self] in self?.canPowerOff ?? false },
+            canUseEqualizer: { [weak self] in self?.canUseEqualizer ?? false },
+            onSelectEqualizerPreset: { [weak self] preset in self?.requestEqualizerPreset(preset) },
+            onSetEqualizerOn: { [weak self] on in on ? self?.requestEqualizerOn() : self?.requestEqualizerOff() },
+            canUseMaxVolumeLimiter: { [weak self] in self?.canUseMaxVolumeLimiter ?? false },
+            onSetMaxVolumeLimiter: { [weak self] on in self?.requestSetMaxVolumeLimiter(on) },
+            canUseVoicePrompt: { [weak self] in self?.canUseVoicePrompt ?? false },
+            onSetVoicePrompt: { [weak self] on in self?.requestSetVoicePrompt(on) },
+            onIslandSettingsChanged: { [weak self] in self?.notchSettingsDidChange() }
         )
         self.panel = panel
         let showCircle = UserDefaults.standard.object(forKey: "showNotchCircle") as? Bool ?? true
@@ -312,6 +324,95 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeSession?.noiseModeCoordinator.requestMode(mode)
     }
 
+    /// DeviceProfile.isPowerOffVerified's own doc comment — gates ExpandedCard's IconPower button.
+    var canPowerOff: Bool {
+        activeSession?.profile.isPowerOffVerified ?? false
+    }
+
+    /// Sends the power-off command through the exact same WriteGuard/rate-limit/transport path a
+    /// noise-mode command goes through (NoiseControlCommander.send). No pending/confirmation
+    /// state to track afterward, unlike a noise-mode request: there's no status event to wait for
+    /// — the headphones either ack and disconnect, or the write is refused outright.
+    func requestPowerOff() {
+        guard let profile = activeSession?.profile, profile.isPowerOffVerified, let frame = profile.powerOffCommandFrame else {
+            logger.error("Refusing power-off request: not verified for this profile")
+            return
+        }
+        activeSession?.noiseControlCommander.send(frame, label: "power-off")
+    }
+
+    /// DeviceProfile.isEqualizerVerified's own doc comment — gates the equalizer UI.
+    var canUseEqualizer: Bool {
+        activeSession?.profile.isEqualizerVerified ?? false
+    }
+
+    /// Sends `preset`'s full transaction and, once it actually goes through, updates
+    /// HeadphoneState's own local/optimistic equalizerPreset/equalizerOn — there's no RACE event
+    /// to wait for the way noise-mode confirmation has (EqualizerPreset's own doc comment), so
+    /// this is the only place either of those two properties ever changes.
+    func requestEqualizerPreset(_ preset: EqualizerPreset) {
+        guard canUseEqualizer else {
+            logger.error("Refusing equalizer-preset request: not verified for this profile")
+            return
+        }
+        Task { [weak self] in
+            guard let self, let sent = await self.activeSession?.equalizerCommander.setPreset(preset), sent else { return }
+            self.headphoneState.equalizerPreset = preset
+            self.headphoneState.equalizerOn = true
+        }
+    }
+
+    /// Turning the Equalizer off sends `.studio`'s own transaction (no separate "off" transaction
+    /// exists — EqualizerPreset's own doc comment) but does NOT touch `equalizerPreset`, so turning
+    /// it back on later can restore whichever preset was actually selected, not silently flip to
+    /// Studio.
+    func requestEqualizerOff() {
+        guard canUseEqualizer else {
+            logger.error("Refusing equalizer-off request: not verified for this profile")
+            return
+        }
+        Task { [weak self] in
+            guard let self, let sent = await self.activeSession?.equalizerCommander.setPreset(.studio), sent else { return }
+            self.headphoneState.equalizerOn = false
+        }
+    }
+
+    /// Turning the Equalizer back on replays whichever preset was last selected (defaulting to
+    /// Studio if none has been set this session yet — matches the real device's own default).
+    func requestEqualizerOn() {
+        requestEqualizerPreset(headphoneState.equalizerPreset ?? .studio)
+    }
+
+    var canUseMaxVolumeLimiter: Bool {
+        activeSession?.profile.isMaxVolumeLimiterVerified ?? false
+    }
+
+    /// Single-frame toggle, same send path as power-off — see DeviceToggle's own doc comment for
+    /// why `headphoneState.maxVolumeLimiterOn` only updates once the write actually went through,
+    /// and why there's no confirmation to wait for afterward.
+    func requestSetMaxVolumeLimiter(_ on: Bool) {
+        guard canUseMaxVolumeLimiter else {
+            logger.error("Refusing max-volume-limiter request: not verified for this profile")
+            return
+        }
+        guard activeSession?.noiseControlCommander.send(DeviceToggle.maxVolumeLimiter.commandFrame(on: on), label: "max-volume-limiter") == true else { return }
+        headphoneState.maxVolumeLimiterOn = on
+    }
+
+    var canUseVoicePrompt: Bool {
+        activeSession?.profile.isVoicePromptVerified ?? false
+    }
+
+    /// Same pattern as `requestSetMaxVolumeLimiter` — DeviceToggle.voicePrompt's own doc comment.
+    func requestSetVoicePrompt(_ on: Bool) {
+        guard canUseVoicePrompt else {
+            logger.error("Refusing voice-prompt request: not verified for this profile")
+            return
+        }
+        guard activeSession?.noiseControlCommander.send(DeviceToggle.voicePrompt.commandFrame(on: on), label: "voice-prompt") == true else { return }
+        headphoneState.voicePromptOn = on
+    }
+
     // MARK: - §5 "No headphones" actions
 
     private static let lastMatchedProfileDisplayNameKey = "lastMatchedProfileDisplayName"
@@ -461,6 +562,8 @@ extension AppDelegate: ClassicConnectionMonitorDelegate {
         headphoneState.noiseModeConfirmationTimedOut = false
         headphoneState.noiseMode = .unknown
         headphoneState.noiseModeEventMapVerified = true
+        // equalizerPreset/equalizerOn deliberately NOT reset here — HeadphoneState's own doc
+        // comment on why (owner request: the setting should survive a headphones power cycle).
         activeSession?.bleLink.stopMonitoring()
         activeSession?.rfcommLink.handleClassicDisconnected()
         activeSession = nil

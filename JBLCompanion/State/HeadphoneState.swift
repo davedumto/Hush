@@ -99,6 +99,49 @@ final class HeadphoneState {
     /// True if the last pending command's 2s confirmation window elapsed with no matching event.
     var noiseModeConfirmationTimedOut: Bool = false
 
+    /// Local/optimistic only — unlike `noiseMode`, there is no RACE event broadcasting an EQ
+    /// preset change to other connected clients (confirmed: no 5C ever appeared for it in any
+    /// capture), so Hush has no way to passively detect a preset changed from the phone app. This
+    /// just remembers whichever preset Hush itself last sent; `nil` means Hush hasn't set one yet
+    /// (the device's own current state is otherwise unknown to Hush). Persisted to UserDefaults
+    /// (owner request, 2026-10-22: "if I had extreme bass on and I turn off my headphones and then
+    /// turn it back on, the setting should still be there and active") and deliberately NOT reset
+    /// on disconnect — AppDelegate used to zero both of these in its disconnect handler, which is
+    /// exactly what the owner reported losing. This never re-sends anything to hardware on its own
+    /// (no auto-resend on reconnect — CLAUDE.md's Bluetooth-behavior rules); it only keeps the
+    /// card's own display of "what Hush last asked for" alive across a disconnect/reconnect cycle,
+    /// same as the real device's own EQ curve is expected to persist through a power cycle.
+    var equalizerPreset: EqualizerPreset? = {
+        guard let raw = UserDefaults.standard.string(forKey: HeadphoneState.equalizerPresetDefaultsKey) else { return nil }
+        return EqualizerPreset(rawValue: raw)
+    }() {
+        didSet { UserDefaults.standard.set(equalizerPreset?.rawValue, forKey: HeadphoneState.equalizerPresetDefaultsKey) }
+    }
+    /// Same reasoning as `equalizerPreset` — local/optimistic, no device confirmation available,
+    /// persisted the same way. Turning the Equalizer "off" sends `.studio`'s own transaction
+    /// (EqualizerPreset's own doc comment), so this is tracked separately rather than folded into
+    /// `equalizerPreset == nil`.
+    var equalizerOn: Bool = UserDefaults.standard.bool(forKey: HeadphoneState.equalizerOnDefaultsKey) {
+        didSet { UserDefaults.standard.set(equalizerOn, forKey: HeadphoneState.equalizerOnDefaultsKey) }
+    }
+
+    /// Same reasoning/persistence as `equalizerOn` — DeviceToggle.maxVolumeLimiter's own doc
+    /// comment covers what's hardware-verified here.
+    var maxVolumeLimiterOn: Bool = UserDefaults.standard.bool(forKey: HeadphoneState.maxVolumeLimiterOnDefaultsKey) {
+        didSet { UserDefaults.standard.set(maxVolumeLimiterOn, forKey: HeadphoneState.maxVolumeLimiterOnDefaultsKey) }
+    }
+    /// Same reasoning/persistence as `equalizerOn` — DeviceToggle.voicePrompt's own doc comment
+    /// covers what's hardware-verified here (and why its confirmation is weaker than the other
+    /// toggle's).
+    var voicePromptOn: Bool = UserDefaults.standard.bool(forKey: HeadphoneState.voicePromptOnDefaultsKey) {
+        didSet { UserDefaults.standard.set(voicePromptOn, forKey: HeadphoneState.voicePromptOnDefaultsKey) }
+    }
+
+    private static let equalizerPresetDefaultsKey = "com.davidejere.Hush.equalizerPreset"
+    private static let equalizerOnDefaultsKey = "com.davidejere.Hush.equalizerOn"
+    private static let maxVolumeLimiterOnDefaultsKey = "com.davidejere.Hush.maxVolumeLimiterOn"
+    private static let voicePromptOnDefaultsKey = "com.davidejere.Hush.voicePromptOn"
+
     #if DEBUG
     /// Populated only by the Debug menu's "Send test frame…" — cleared when a test send starts,
     /// then holds up to the next 5 RACE events received afterward, each as a plain display string.
