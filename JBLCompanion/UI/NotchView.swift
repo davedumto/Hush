@@ -120,6 +120,11 @@ struct NotchView: View {
     /// reconstructs it, so a plain value would never reflect a later display change. Drives
     /// CollapsedPill's always-black, square-top notch variant.
     let isNotched: () -> Bool
+    /// Island Settings' own "Notch/Island" picker row — hardware-only (setting-independent), so
+    /// the row can decide whether to show itself at all; see NotchPanel.hasRealNotch(on:)'s own
+    /// doc comment.
+    let hasRealNotchOnCurrentDisplay: () -> Bool
+    let currentDisplayUUID: () -> String?
     /// Which screen edge the island is currently docked to (design/DESIGN_GUIDE.md §6) — a
     /// closure, same reasoning as `isNotched`: NotchPanel builds this NotchView once, but the
     /// edge can change later (drag, Island Settings, a screen change).
@@ -270,8 +275,18 @@ struct NotchView: View {
     @ViewBuilder
     private var collapsedContent: some View {
         let size = collapsedSize()
-        CollapsedPill(variant: pillVariant, diameter: IslandSettings.pillDiameter, photoNamespace: pillPhotoNamespace)
-            .frame(width: size.width, height: size.height)
+        if isNotched(), dockEdge() == .top {
+            // Owner spec, 2026-10-24 — see NotchExtensionBar's own doc comment: a real notch gets
+            // a fused two-wing bar instead of CollapsedPill's plain floating circle.
+            NotchExtensionBar(
+                noiseMode: state.noiseMode, isMediaPlaying: state.isMediaPlaying,
+                isConnected: state.connection == .connected, height: size.height
+            )
+                .frame(width: size.width, height: size.height)
+        } else {
+            CollapsedPill(variant: pillVariant, diameter: IslandSettings.pillDiameter, photoNamespace: pillPhotoNamespace)
+                .frame(width: size.width, height: size.height)
+        }
     }
 
     /// The pill is always mounted (see the body's own doc comment on why), so without this gate
@@ -321,6 +336,7 @@ struct NotchView: View {
     private var expandedContent: some View {
         ExpandedCard(
             state: state, dock: dockEdge().cardDock, dockedCorner: dockedCorner(), freeFloatingNotch: freeFloatingNotch(),
+            isAttachedToRealNotch: isNotched() && dockEdge() == .top,
             onCollapseTapped: onCollapseTabTapped,
             isModeVerified: isModeVerified,
             supportsNoiseControl: supportsNoiseControl(), onSelectNoiseMode: onSelectNoiseMode,
@@ -329,6 +345,7 @@ struct NotchView: View {
             onPowerOff: onPowerOff, canPowerOff: canPowerOff(), canUseEqualizer: canUseEqualizer(),
             onSelectEqualizerPreset: onSelectEqualizerPreset, onSetEqualizerOn: onSetEqualizerOn,
             onIslandSettingsChanged: onIslandSettingsChanged,
+            hasRealNotchOnCurrentDisplay: hasRealNotchOnCurrentDisplay, currentDisplayUUID: currentDisplayUUID,
             canUseMaxVolumeLimiter: canUseMaxVolumeLimiter(), onSetMaxVolumeLimiter: onSetMaxVolumeLimiter,
             canUseVoicePrompt: canUseVoicePrompt(), onSetVoicePrompt: onSetVoicePrompt,
             openIslandSettingsRequestToken: uiState.islandSettingsRequestToken

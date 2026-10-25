@@ -67,7 +67,14 @@ struct IslandGeometry: Equatable {
         self.screen = screen
 
         let barHeight = rawMenuBarHeight.isFinite ? min(64, max(16, rawMenuBarHeight)) : 24
-        isNotched = safeAreaTop.isFinite && safeAreaTop > 0 && rawCameraWidth.isFinite && rawCameraWidth > 0
+        // A real notch's safe-area inset is always well under the 64pt cap cameraHeight itself
+        // enforces below. Owner-reported, 2026-10-24: at a scaled built-in-display resolution,
+        // safeAreaTop can come back implausibly large/mismatched with the rest of the screen's
+        // current geometry — bounding it here (not just clamping cameraHeight after the fact)
+        // keeps a bogus reading from flipping isNotched true at all, which is what was forcing
+        // floatingDrop to 0 and dropping the island well below the real menu bar.
+        isNotched = safeAreaTop.isFinite && safeAreaTop > 0 && safeAreaTop <= 64
+            && rawCameraWidth.isFinite && rawCameraWidth > 0
 
         // A real camera always hangs the island flush from the top edge, sized to its own
         // housing. Every other case floats instead, regardless of edge.

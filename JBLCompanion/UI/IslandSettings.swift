@@ -29,10 +29,24 @@ enum IslandSettings {
         /// `dockEdge`/`freePosition` above. Absent (not just an empty string) means "not corner-
         /// docked," not "docked to some default corner."
         static func dockedCorner(forDisplayUUID uuid: String) -> String { "islandDockedCorner.\(uuid)" }
+        /// Owner spec, 2026-10-25: only meaningful on a display with a real camera notch — whether
+        /// the top dock there is the fixed, fused NotchExtensionBar ("Notch") or the ordinary
+        /// draggable/dockable island ("Island", everything this app had before that feature).
+        static func notchAttachmentMode(forDisplayUUID uuid: String) -> String { "islandNotchAttachmentMode.\(uuid)" }
     }
 
     enum PlacementMode: String {
         case edge, free
+    }
+
+    /// Owner spec, 2026-10-25: "when we are on the default mac display that has a notch, one can
+    /// set it to be in the notch from the island settings or be an island." `.notch` is the fused,
+    /// fixed NotchExtensionBar; `.island` is the ordinary draggable/dockable behavior every other
+    /// display already has, available on a notched display too for anyone who prefers it. Has no
+    /// effect at all on a display without a real notch (NotchPanel only ever consults this when
+    /// `geometry.isNotched` is already true).
+    enum NotchAttachmentMode: String {
+        case notch, island
     }
 
     /// The collapsed pill's own diameter — a circle, the same on every edge. 0 (UserDefaults'
@@ -109,6 +123,18 @@ enum IslandSettings {
 
     static func setPlacementMode(_ mode: PlacementMode, forDisplayUUID uuid: String) {
         UserDefaults.standard.set(mode.rawValue, forKey: Key.placementMode(forDisplayUUID: uuid))
+    }
+
+    /// `.notch` (the new default behavior) when nothing has been saved yet for this display — the
+    /// owner's own framing was "notch setting would be just this [current behavior]," i.e. Notch
+    /// is the baseline a notched display starts in, not something to opt into.
+    static func notchAttachmentMode(forDisplayUUID uuid: String) -> NotchAttachmentMode {
+        guard let raw = UserDefaults.standard.string(forKey: Key.notchAttachmentMode(forDisplayUUID: uuid)) else { return .notch }
+        return NotchAttachmentMode(rawValue: raw) ?? .notch
+    }
+
+    static func setNotchAttachmentMode(_ mode: NotchAttachmentMode, forDisplayUUID uuid: String) {
+        UserDefaults.standard.set(mode.rawValue, forKey: Key.notchAttachmentMode(forDisplayUUID: uuid))
     }
 
     /// The island's own free-floating center point in screen coordinates, when

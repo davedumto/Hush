@@ -73,6 +73,13 @@ final class NotchPanel: NSPanel {
     private let silhouette = NotchSilhouetteView(frame: .zero)
     private var hosting: NSHostingView<NotchView>!
 
+    /// Owner spec, 2026-10-25 (reverted same day): dragging the island onto the notch used to
+    /// magnetically fuse it into the Notch-mode bar, then un-fuse on drag-out. Removed — "remove
+    /// the drag to notch feature, let's just set it from the settings": whether a notched display
+    /// renders the fused bar or the plain draggable pill is purely `IslandSettings.
+    /// notchAttachmentMode(forDisplayUUID:)` (`baseGeometry(for:measurements:)`'s own doc comment
+    /// on how that already zeroes `cameraWidth`/`safeAreaTop` for Island mode) — no drag-driven
+    /// state needed on top of it.
     private var geometry: IslandGeometry
     /// The resolved display's visibleFrame (excludes the menu bar and, where applicable, the
     /// Dock) — design/DESIGN_GUIDE.md §6: bottom/left/right placement all key off this, not the
@@ -155,6 +162,8 @@ final class NotchPanel: NSPanel {
     private var presentGeneration = 0
 
     private var menuBarMeasurements = MenuBarMeasurements()
+    /// screenParametersChanged's own debounce work item — see its doc comment for why.
+    private var pendingRepositionWorkItem: DispatchWorkItem?
     /// Both added only while expanded, removed on collapse (design/DESIGN_GUIDE.md §9.2) — unlike
     /// the screen-edge monitors below, which are about *opening* a floating capsule and have
     /// nothing to do with being expanded.
@@ -270,7 +279,24 @@ final class NotchPanel: NSPanel {
         let visibleFrameForInit = screen?.visibleFrame ?? initialGeometry.screen
         self.freeCenter = uuid.flatMap { IslandSettings.freePosition(forDisplayUUID: $0) } ?? CGPoint(x: visibleFrameForInit.midX, y: visibleFrameForInit.midY)
         self.dockedCorner = uuid.flatMap { IslandSettings.dockedCorner(forDisplayUUID: $0) }
-        self.currentSize = Self.collapsedSize(for: (resolvedIsFree || self.dockedCorner != nil) ? .bottom : resolvedEdge, geometry: initialGeometry)
+        // Owner-reported, 2026-10-25: "on relaunch it defaults to island even if the setting is on
+        // notch." Notch mode has no placement of its own at all — it's always centered on the real
+        // notch — but a previous Island-mode session on this same display (free-positioned, corner-
+        // docked, or docked to a non-top edge) still has that placement saved under this display's
+        // UUID. `reposition()` already force-resets exactly this the moment it runs (its own doc
+        // comment), but that only fires on a later screen-parameter change — at launch, `self`
+        // doesn't exist yet to call it, so the window's very first frame was still built from the
+        // stale Island-mode placement, rendering as a plain pill even though the setting says
+        // Notch. Mirroring that same reset here, against the locals already resolved above, makes
+        // the very first launch match the setting immediately instead of needing a screen change
+        // (or a drag) to self-correct.
+        if initialGeometry.isNotched, !(resolvedIsFree == false && self.dockedCorner == nil && resolvedEdge == .top) {
+            self.edge = .top
+            self.offset = 0
+            self.isFreePositioned = false
+            self.dockedCorner = nil
+        }
+        self.currentSize = Self.collapsedSize(for: (self.isFreePositioned || self.dockedCorner != nil) ? .bottom : self.edge, geometry: initialGeometry)
 
         super.init(
             contentRect: .zero, // real frame set via setFrame(_:display:) below, once contentView/silhouette exist.
@@ -318,7 +344,13 @@ final class NotchPanel: NSPanel {
                     self.map { Self.collapsedSize(for: $0.effectiveEdgeForGeometry, geometry: $0.geometry) } ?? .zero
                 },
                 onSelectNoiseMode: onSelectNoiseMode, isModeVerified: isModeVerified,
-                supportsNoiseControl: supportsNoiseControl, isNotched: { [weak self] in self?.isNotched ?? false },
+                supportsNoiseControl: supportsNoiseControl,
+                isNotched: { [weak self] in self?.isNotched ?? false },
+                hasRealNotchOnCurrentDisplay: {
+                    guard let screen = Self.resolveScreen().screen else { return false }
+                    return Self.hasRealNotch(on: screen)
+                },
+                currentDisplayUUID: { [weak self] in self?.currentDisplayUUID },
                 dockEdge: { [weak self] in self?.effectiveEdgeForGeometry ?? .top },
                 dockedCorner: { [weak self] in self?.dockedCorner },
                 freeFloatingNotch: { [weak self] in self?.freeFloatingNotch() },
@@ -357,7 +389,13 @@ final class NotchPanel: NSPanel {
         contentView = container
 
         silhouette.onTap = { [weak self] in self?.handleTap() }
-        silhouette.canDrag = { [weak self] in !(self?.uiState.isExpanded ?? true) }
+        // Owner spec, 2026-10-25: "on notch, it should sit there and not be able to be moved" —
+        // the fused NotchExtensionBar is permanently centered on the real notch; a drag starting
+        // on it would otherwise still run (this gate only ever checked `isExpanded`), relocating
+        // the window via `clampedDragOrigin`/`handleDragEnd` directly — neither of those goes
+        // through `windowFrame(for:)`'s own notch centering, so a drag could actually move it away
+        // from the notch even though every *layout* recompute would snap it straight back.
+        silhouette.canDrag = { [weak self] in !(self?.uiState.isExpanded ?? true) && !(self?.isNotched ?? false) }
         // Re-enabled: a `log stream` capture with this disabled showed drops landing hundreds to
         // thousands of points off-screen, producing raw `offset`/`freeCenter` values so extreme
         // that the collapsed pill's and expanded card's own per-size offset clamps (windowFrame
@@ -469,6 +507,11 @@ final class NotchPanel: NSPanel {
 
     // MARK: - Settings changed (size/silhouette/fits/outline/display/edge)
 
+    // Owner spec, 2026-10-24: both the collapsed state (NotchExtensionBar — a fused two-wing bar)
+    // and the expanded card now render flush/attached to a real notch, centered on it, so this no
+    // longer needs to distinguish collapsed from expanded the way an earlier (now-replaced)
+    // beside-the-notch-circle version of the collapsed state did.
+    //
     var isNotched: Bool { !isFreePositioned && dockedCorner == nil && edge == .top && geometry.isNotched }
 
     /// The fallback NSStatusItem menu's own "Island Settings…" item. Island Settings no longer has
@@ -826,7 +869,17 @@ final class NotchPanel: NSPanel {
     // MARK: - Screen / geometry resolution
 
     @objc private func screenParametersChanged() {
-        reposition()
+        // Owner-reported, 2026-10-24: reacting to this notification immediately could read
+        // screen.visibleFrame/auxiliaryTopLeftArea/auxiliaryTopRightArea a moment before AppKit had
+        // actually settled the new geometry (seen going into/out of a scaled built-in-display
+        // resolution), caching a bad menu-bar-height/notch reading for that display that then stuck
+        // until the next change. Debounce instead of acting on the first firing — this notification
+        // can also fire several times in a burst for one real change (e.g. Spaces + Dock
+        // repositioning together), so this also collapses those into a single reposition().
+        pendingRepositionWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in self?.reposition() }
+        pendingRepositionWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: workItem)
     }
 
     func reposition(force: Bool = false) {
@@ -840,6 +893,24 @@ final class NotchPanel: NSPanel {
         let next = Self.baseGeometry(for: screen, measurements: menuBarMeasurements)
         let nextVisibleFrame = screen.visibleFrame
         let nextUUID = screen.stableDisplayUUIDString
+
+        // Owner-reported, 2026-10-25: switching Island Settings from Island back to Notch after
+        // having dragged the island to a free position elsewhere on screen did nothing until it
+        // was dragged back close to the notch first. Cause: `isNotched` (this panel's own computed
+        // property) requires `!isFreePositioned && dockedCorner == nil && edge == .top` on top of
+        // `geometry.isNotched` — flipping the setting makes `geometry.isNotched` true again
+        // immediately, but `isFreePositioned`/`dockedCorner`/`edge` are per-display placement state
+        // that `reposition()` otherwise only ever touches when the *display itself* changes (right
+        // below), so a stale free/corner/other-edge placement from Island mode silently kept
+        // `isNotched` false until something else (a drag) happened to reset them. Notch mode has no
+        // placement of its own at all — it's always centered on the real notch — so force this
+        // state back to its baseline the instant the geometry says a real notch is active again.
+        if next.isNotched, !(isFreePositioned == false && dockedCorner == nil && edge == .top) {
+            isFreePositioned = false
+            dockedCorner = nil
+            edge = .top
+            silhouette.dockEdge = edge
+        }
 
         if nextUUID != currentDisplayUUID {
             // A genuinely different physical display — load *that* display's own saved
@@ -946,43 +1017,111 @@ final class NotchPanel: NSPanel {
         }
     }
 
+    /// The raw, hardware-only "does this screen have a real camera notch" reading — never affected
+    /// by IslandSettings.notchAttachmentMode (that's applied afterward, only inside
+    /// `baseGeometry(for:measurements:)`). Exposed via `hasRealNotch(on:)` so Island Settings can
+    /// decide whether to even show the Notch/Island choice, independent of whichever one is
+    /// currently selected.
+    private static func rawNotchInfo(for screen: NSScreen) -> (cameraWidth: CGFloat, safeAreaTop: CGFloat) {
+        // Owner-reported, 2026-10-24: on the built-in display at a scaled ("more space", non-
+        // native) resolution — e.g. 1470x956 — auxiliaryTopLeftArea/auxiliaryTopRightArea can
+        // report rects that don't match the coordinate space screen.frame is currently expressed
+        // in (that mismatch only ever showed up at a non-native scaled resolution in testing; the
+        // same Mac's external display, which never runs scaled, never hit it). A bogus cameraWidth
+        // flips IslandGeometry.isNotched true on a display that isn't actually presenting a real
+        // camera notch right now, which forces floatingDrop to 0 and hangs the island flush using
+        // the notch-sized cameraHeight instead of the user's own top margin — reading as the island
+        // dropping well below the real menu bar, floating over window content. A real notch is a
+        // few hundred points wide at most on any Mac display; bound cameraWidth to a width a real
+        // notch could plausibly be (and require it sit near the screen's own top edge) before
+        // trusting it, rather than accepting whatever the API hands back unchecked.
+        let cameraWidth: CGFloat
+        if let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea,
+            left.maxY > screen.frame.maxY - 64, right.maxY > screen.frame.maxY - 64 {
+            let rawWidth = right.minX - left.maxX
+            cameraWidth = (rawWidth.isFinite && rawWidth > 0 && rawWidth <= min(320, screen.frame.width * 0.4))
+                ? rawWidth : 0
+        } else {
+            cameraWidth = 0
+        }
+        return (cameraWidth, screen.safeAreaInsets.top)
+    }
+
+    /// Hardware-only, setting-independent — IslandSettingsControls' own "Notch/Island" picker row
+    /// uses this to decide whether to show itself at all.
+    static func hasRealNotch(on screen: NSScreen) -> Bool {
+        let raw = rawNotchInfo(for: screen)
+        return raw.safeAreaTop.isFinite && raw.safeAreaTop > 0 && raw.safeAreaTop <= 64
+            && raw.cameraWidth.isFinite && raw.cameraWidth > 0
+    }
+
     private static func baseGeometry(for screen: NSScreen?, measurements: MenuBarMeasurements) -> IslandGeometry {
         guard let screen else {
             return IslandGeometry(screen: .zero, safeAreaTop: 0, cameraWidth: 0)
         }
         var measurements = measurements
-        let cameraWidth: CGFloat
-        if let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea {
-            cameraWidth = max(0, right.minX - left.maxX)
-        } else {
+        let raw = rawNotchInfo(for: screen)
+        var cameraWidth = raw.cameraWidth
+        var safeAreaTop = raw.safeAreaTop
+        // Owner spec, 2026-10-25: "Notch" vs "Island" in Island Settings — only meaningful on a
+        // display that actually has a real notch. The single source of truth every notch-aware
+        // branch downstream already keys off is `IslandGeometry.isNotched`, itself derived purely
+        // from `safeAreaTop`/`cameraWidth` — zeroing both here, before they ever reach
+        // `IslandGeometry.init`, is what makes every one of those branches (collapsed sizing/
+        // positioning, the fused bar's own rendering, drag-locking, the native silhouette's fill)
+        // fall back to the exact same behavior a non-notched display already has in "Island" mode,
+        // with no separate setting check needed at any of those call sites.
+        if let uuid = screen.stableDisplayUUIDString, IslandSettings.notchAttachmentMode(forDisplayUUID: uuid) == .island {
             cameraWidth = 0
+            safeAreaTop = 0
         }
         let menuBarHeight = measurements.height(
             displayID: screen.notchDisplayID, frame: screen.frame, visibleTop: screen.visibleFrame.maxY,
             scale: screen.backingScaleFactor, statusBarThickness: NSStatusBar.system.thickness
         )
         return IslandGeometry(
-            screen: screen.frame, safeAreaTop: screen.safeAreaInsets.top, cameraWidth: cameraWidth,
+            screen: screen.frame, safeAreaTop: safeAreaTop, cameraWidth: cameraWidth,
             menuBarHeight: menuBarHeight, topMargin: IslandSettings.edgeMargin(for: .top)
         )
     }
 
-    /// Only a real physical camera notch hangs flush from the top edge, sized to its own housing
-    /// (IslandGeometry.collapsedSize) — every other case, on every edge including a non-notched
-    /// top dock, is always CollapsedPill's own plain circle at its configured diameter
-    /// (IslandSettings.pillDiameter). The two layers (this native silhouette's size and
-    /// CollapsedPill's own SwiftUI content) have to stay in exact lockstep; the "notch" silhouette
-    /// simulating a wide cutout here used to produce a visibly different (and differently shaped)
-    /// background behind the always-circular SwiftUI pill — owner feedback, not a guess.
+    /// Owner-reported, 2026-10-24: a real camera notch used to hang the *collapsed* pill flush
+    /// from the top edge, sized to its own housing (IslandGeometry.collapsedSize) — invisible,
+    /// since nothing can draw over the real camera cutout. The collapsed icon on a notched top
+    /// dock is now a plain circle beside the notch instead (windowFrame(for:)'s own `.top` case
+    /// positions it), sized to the notch's own height so it still reads as sitting right in the
+    /// menu bar row rather than floating at some unrelated size. Every other case — every edge
+    /// without a real notch — is still always CollapsedPill's own plain circle at its configured
+    /// diameter (IslandSettings.pillDiameter). The *expanded* card's own sizing
+    /// (expandedSize(for:geometry:)) is unaffected — it still grows centered, flush over the real
+    /// notch, unchanged.
+    /// Owner spec, 2026-10-24 (superseding the single-circle-beside-the-notch version this
+    /// replaced): on a real notch, the collapsed window spans the notch's own width plus one
+    /// `notchWingWidth`-wide wing on each side — see NotchExtensionBar's own doc comment for what
+    /// actually renders inside that span. Height is always the notch's own height
+    /// (`geometry.cameraHeight`), never taller, per the owner's explicit constraint — owner
+    /// request, 2026-10-25: "reduce the height by a very little bit" then, once applied, "increase
+    /// the height a very tiny bit" (it had gone slightly too far the other way) — settled at 2pt
+    /// off, not the original 4. Same pass also shrank `notchWingWidth` ("reduce the width a bit
+    /// more") from the first-cut 44 down to 32.
+    private static let notchWingWidth: CGFloat = 32
+    private static let notchBarHeightReduction: CGFloat = 3
+
     private static func collapsedSize(for edge: DockEdge, geometry: IslandGeometry) -> CGSize {
-        (edge == .top && geometry.isNotched) ? geometry.collapsedSize : DockPlacement.collapsedPillSize(for: edge, diameter: IslandSettings.pillDiameter)
+        if edge == .top && geometry.isNotched {
+            let height = max(16, geometry.cameraHeight - notchBarHeightReduction)
+            return CGSize(width: geometry.cameraWidth + notchWingWidth * 2, height: height)
+        }
+        return DockPlacement.collapsedPillSize(for: edge, diameter: IslandSettings.pillDiameter)
     }
 
     /// The native silhouette's own shape inset for the *collapsed* pill — non-nil (a full circle,
     /// not NotchSilhouetteView's "card" radius) on every edge except a real top-edge camera
-    /// notch, which hangs flush instead (IslandGeometry.floatingGap is already nil there). Left/
-    /// right/bottom never had an equivalent of IslandGeometry's own notch detection, so they
-    /// always get the same small flat inset regardless of what the display reports.
+    /// notch, which hangs flush instead (IslandGeometry.floatingGap is already nil there,
+    /// matching `isNotched`'s own doc comment: both collapsed and expanded are flush/attached to
+    /// a real notch now). Left/right/bottom never had an equivalent of IslandGeometry's own notch
+    /// detection, so they always get the same small flat inset regardless of what the display
+    /// reports.
     private static func collapsedGap(edge: DockEdge, geometry: IslandGeometry) -> CGFloat? {
         edge == .top ? geometry.floatingGap : DockPlacement.collapsedPillInset
     }
@@ -1053,6 +1192,13 @@ final class NotchPanel: NSPanel {
         }
         switch edge {
         case .top:
+            // Owner spec, 2026-10-24: a real camera notch used to center the collapsed pill flush
+            // over the notch itself — invisible, since nothing can draw over the physical camera
+            // cutout. The collapsed state is now a fused two-wing bar centered on the notch
+            // instead (NotchExtensionBar's own doc comment; collapsedSize(for:geometry:) already
+            // sizes it notch-width-plus-a-wing-on-each-side), so it wants the exact same centered,
+            // flush-top placement `geometry.frame(for:)` below already gives the expanded card —
+            // no separate branch needed anymore now that both states share one centered shape.
             // `offset` re-clamped fresh here, against whichever `size` is actually being resolved
             // right now — same reasoning as the `.bottom, .left, .right` branch just below (its own
             // doc comment has the full story). `.top` used to add the raw, pill-sized `offset`
@@ -1062,6 +1208,12 @@ final class NotchPanel: NSPanel {
             // enough to get hard-clipped by the OS, which is what read as "part of it is hidden."
             var frame = geometry.frame(for: size)
             if symmetric { frame.origin.y += Self.shadowMargin }
+            // Owner-reported, 2026-10-25: a real notch's fused bar is meant to stay permanently
+            // centered on the notch, not draggable along the edge — any `offset` persisted from
+            // when the top dock was still a plain draggable pill (before this feature existed)
+            // would otherwise still get applied here, visibly shifting the bar off-center from
+            // the real notch for no reason the user did on *this* build.
+            guard !geometry.isNotched else { return frame }
             let adaptiveOffset: CGFloat
             if let range = DockPlacement.offsetRange(forSize: size, edge: edge, visibleFrame: visibleFrame, margin: 8) {
                 adaptiveOffset = min(max(offset, range.lowerBound), range.upperBound)

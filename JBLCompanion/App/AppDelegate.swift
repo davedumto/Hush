@@ -96,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // two status items for one app was the actual bug "fallback" implied fixing).
         setupFallbackStatusItem()
         startObservingHeadphoneStateForMenuBarIcon()
+        startObservingMediaPlayback()
 
         classicMonitor.delegate = self
 
@@ -241,6 +242,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.updateMenuBarIcon()
                 self?.startObservingHeadphoneStateForMenuBarIcon() // re-arms itself — see this method's own doc comment.
             }
+        }
+    }
+
+    /// MediaPlaybackMonitor's own doc comment: mirrors system-wide "is anything playing audio
+    /// right now" into `headphoneState.isMediaPlaying`, which NotchExtensionBar reads for its
+    /// media indicator. Set once up front (the monitor may already know an answer by the time
+    /// this runs) and kept live via `onChange` for every change after.
+    private func startObservingMediaPlayback() {
+        headphoneState.isMediaPlaying = MediaPlaybackMonitor.shared.isPlaying
+        MediaPlaybackMonitor.shared.onChange = { [weak self] isPlaying in
+            Task { @MainActor [weak self] in self?.headphoneState.isMediaPlaying = isPlaying }
         }
     }
 

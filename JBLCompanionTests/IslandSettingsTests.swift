@@ -115,18 +115,42 @@ final class IslandSettingsTests: XCTestCase {
 
     // MARK: - Auto-expand on connect
 
+    /// Unlike every other setting above, `autoExpandOnConnect` has no per-display/per-edge UUID to
+    /// key by — it's one single global `UserDefaults.standard` key, the exact same domain the real
+    /// app itself reads. Owner-reported, 2026-10-25: "the auto expand on connect toggle is not
+    /// persistent to its settings... it keeps changing on relaunch." Root cause: these two tests
+    /// used to mutate that real key directly and "clean up" with a plain `removeObject`, which
+    /// doesn't restore whatever the real value was beforehand, it just deletes it — so every
+    /// `xcodebuild test` run silently reset the real toggle back to off on the developer's own
+    /// machine. Snapshotting the real value before each test and restoring it exactly afterward
+    /// (present or absent) makes these two behave like the UUID-scoped tests above: free to mutate
+    /// during the test, with zero observable effect on real app state once it ends.
+    private var savedAutoExpandOnConnect: Any?
+
     func testAutoExpandOnConnectDefaultsToOff() {
+        savedAutoExpandOnConnect = UserDefaults.standard.object(forKey: IslandSettings.Key.autoExpandOnConnect)
         // A fresh key (never set in this process) reads as Bool's own UserDefaults default: false.
         // Covered indirectly — see the task's own "default OFF" requirement — by simply asserting
         // the getter's default without ever having called the setter.
         UserDefaults.standard.removeObject(forKey: IslandSettings.Key.autoExpandOnConnect)
         XCTAssertFalse(IslandSettings.autoExpandOnConnect)
+        restoreAutoExpandOnConnect()
     }
 
     func testAutoExpandOnConnectRoundTrips() {
+        savedAutoExpandOnConnect = UserDefaults.standard.object(forKey: IslandSettings.Key.autoExpandOnConnect)
         IslandSettings.autoExpandOnConnect = true
         XCTAssertTrue(IslandSettings.autoExpandOnConnect)
         IslandSettings.autoExpandOnConnect = false
         XCTAssertFalse(IslandSettings.autoExpandOnConnect)
+        restoreAutoExpandOnConnect()
+    }
+
+    private func restoreAutoExpandOnConnect() {
+        if let savedAutoExpandOnConnect {
+            UserDefaults.standard.set(savedAutoExpandOnConnect, forKey: IslandSettings.Key.autoExpandOnConnect)
+        } else {
+            UserDefaults.standard.removeObject(forKey: IslandSettings.Key.autoExpandOnConnect)
+        }
     }
 }

@@ -13,6 +13,12 @@ import SwiftUI
 /// no meaning at all while free-floating.
 struct IslandSettingsControls: View {
     let onSettingsChanged: () -> Void
+    /// Owner spec, 2026-10-25 — see IslandSettings.NotchAttachmentMode's own doc comment. Both
+    /// hardware-read-only (not @AppStorage-backed the way the other rows are): "which display" and
+    /// "does it have a real notch" are live facts about the currently active display, not stored
+    /// preferences themselves — only the *chosen mode* for that display's UUID is actually stored.
+    var hasRealNotchOnCurrentDisplay: Bool = false
+    var currentDisplayUUID: String? = nil
 
     @AppStorage(IslandSettings.Key.pillDiameter) private var pillDiameter: Double = Double(DockPlacement.collapsedPillDiameter)
     @AppStorage(IslandSettings.Key.chosenDisplayUUID) private var chosenDisplayUUID: String = ""
@@ -22,9 +28,19 @@ struct IslandSettingsControls: View {
     /// real source of truth lives outside UserDefaults entirely here (in Login Items), so this is
     /// seeded on appear and pushed back through SMAppService on change, rather than bound directly.
     @State private var launchAtLogin: Bool = false
+    /// Seeded on appear from IslandSettings.notchAttachmentMode(forDisplayUUID:) (keyed by
+    /// `currentDisplayUUID`, same reasoning as `launchAtLogin` above — the real per-display stored
+    /// value isn't a single fixed @AppStorage key, so it can't bind directly either), then written
+    /// straight back through IslandSettings on change.
+    @State private var notchAttachmentMode: IslandSettings.NotchAttachmentMode = .notch
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
+            if hasRealNotchOnCurrentDisplay {
+                sectionLabel("Notch")
+                glassRow { notchAttachmentRow }
+            }
+
             sectionLabel("Pill size")
             glassRow { pillSizeRow }
 
@@ -39,9 +55,17 @@ struct IslandSettingsControls: View {
         }
         .onAppear {
             launchAtLogin = SMAppService.mainApp.status == .enabled
+            if let currentDisplayUUID {
+                notchAttachmentMode = IslandSettings.notchAttachmentMode(forDisplayUUID: currentDisplayUUID)
+            }
         }
         .onChange(of: pillDiameter) { _, _ in onSettingsChanged() }
         .onChange(of: chosenDisplayUUID) { _, _ in onSettingsChanged() }
+        .onChange(of: notchAttachmentMode) { _, newValue in
+            guard let currentDisplayUUID else { return }
+            IslandSettings.setNotchAttachmentMode(newValue, forDisplayUUID: currentDisplayUUID)
+            onSettingsChanged()
+        }
         .onChange(of: launchAtLogin) { _, newValue in
             do {
                 if newValue {
@@ -54,6 +78,22 @@ struct IslandSettingsControls: View {
                 // reflect what's actually registered rather than a toggle that silently lied.
                 launchAtLogin = SMAppService.mainApp.status == .enabled
             }
+        }
+    }
+
+    private var notchAttachmentRow: some View {
+        HStack {
+            Text("Attachment")
+                .font(Theme.Fonts.subText)
+                .foregroundStyle(Theme.Semantic.textPrimary)
+            Spacer()
+            Picker("", selection: $notchAttachmentMode) {
+                Text("Notch").tag(IslandSettings.NotchAttachmentMode.notch)
+                Text("Island").tag(IslandSettings.NotchAttachmentMode.island)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 160)
         }
     }
 

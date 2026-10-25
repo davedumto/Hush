@@ -26,6 +26,15 @@ struct ExpandedCard: View {
     /// adjacent to the island in whichever direction its grid region names). `nil` for every
     /// other placement mode, which keep the plain, centered `CutoutTabShape` untouched.
     var freeFloatingNotch: (dock: CardDock, offset: CGFloat, anchor: UnitPoint)? = nil
+    /// Owner spec, 2026-10-25: "remove the notch inside the tray for just this one that is
+    /// happening from the notch" — on a real physical camera notch, `tab`'s own `CutoutTabShape`
+    /// (a drawn, fake notch-shaped bump) is now redundant: the real notch plus NotchExtensionBar's
+    /// fused wings already give the card its visual anchor, so drawing a second, decorative fake
+    /// one on top of it read as a notch inside the notch. `true` only for a real top-edge camera
+    /// notch (never free-floating/corner-docked, which already have their own `tab` variants) —
+    /// still keeps a same-sized invisible tap target in the tab's usual spot so collapsing by
+    /// clicking there still works, just with nothing drawn.
+    var isAttachedToRealNotch: Bool = false
     let onCollapseTapped: () -> Void
     /// Per-mode "is this command frame hardware-verified" check (DeviceProfile.isModeVerified).
     let isModeVerified: (CommandableNoiseMode) -> Bool
@@ -62,6 +71,8 @@ struct ExpandedCard: View {
     /// Pushed back through to IslandSettingsControls — AppDelegate.notchSettingsDidChange(), same
     /// callback Island Settings already triggers on every change.
     var onIslandSettingsChanged: () -> Void = {}
+    var hasRealNotchOnCurrentDisplay: () -> Bool = { false }
+    var currentDisplayUUID: () -> String? = { nil }
     /// DeviceToggle.maxVolumeLimiter/.voicePrompt's own doc comments — gates each row in the
     /// Headphone Settings sheet independently (neither gates the other).
     var canUseMaxVolumeLimiter: Bool = false
@@ -265,7 +276,9 @@ struct ExpandedCard: View {
 
     @ViewBuilder
     private var tab: some View {
-        if dockedCorner != nil {
+        if isAttachedToRealNotch {
+            invisibleNotchTapTarget
+        } else if dockedCorner != nil {
             cornerTab
         } else {
             // A free-floating notch can land on any of the 4 card edges regardless of the card's
@@ -298,6 +311,18 @@ struct ExpandedCard: View {
                 .contentShape(shape)
                 .onTapGesture { onCollapseTapped() }
         }
+    }
+
+    /// `isAttachedToRealNotch`'s own doc comment: no `CutoutTabShape` drawn here on purpose — the
+    /// real physical notch plus NotchExtensionBar's fused wings already anchor the card visually,
+    /// so there's nothing left to draw, just the same tap-to-collapse hit target the shape used to
+    /// carry, centered the same way the plain (non-corner, non-free) tab always was.
+    private var invisibleNotchTapTarget: some View {
+        Color.clear
+            .frame(width: 116, height: tabDepthIntoPanel)
+            .contentShape(Rectangle())
+            .frame(width: cardSize.width, height: cardSize.height, alignment: .top)
+            .onTapGesture { onCollapseTapped() }
     }
 
     /// The corner-docked tab: a plain circle — the same silhouette the collapsed island itself
@@ -598,7 +623,10 @@ struct ExpandedCard: View {
                 }
             }
         case .islandSettings:
-            IslandSettingsControls(onSettingsChanged: onIslandSettingsChanged)
+            IslandSettingsControls(
+                onSettingsChanged: onIslandSettingsChanged,
+                hasRealNotchOnCurrentDisplay: hasRealNotchOnCurrentDisplay(), currentDisplayUUID: currentDisplayUUID()
+            )
         case .equalizer:
             EqualizerControls(
                 canUseEqualizer: canUseEqualizer, equalizerPreset: state.equalizerPreset, equalizerOn: state.equalizerOn,

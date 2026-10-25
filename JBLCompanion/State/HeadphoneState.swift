@@ -91,6 +91,11 @@ final class HeadphoneState {
     /// Mirrors the connected profile's DeviceProfile.eventMapVerified — true (no warning) while
     /// disconnected. NoiseModeStatusText appends "(unverified)" to the status line while false.
     var noiseModeEventMapVerified: Bool = true
+    /// System-wide "is anything playing audio right now" (MediaPlaybackMonitor) — not specific to
+    /// the headphones themselves (Hush has no way to know what's actually routed to them), just
+    /// whether macOS reports *some* app currently playing. Drives NotchExtensionBar's media
+    /// indicator (owner spec, 2026-10-25).
+    var isMediaPlaying: Bool = false
     var lastUpdated: Date?
 
     /// Non-nil while a noise-mode command has been sent but not yet confirmed by the headphones.
