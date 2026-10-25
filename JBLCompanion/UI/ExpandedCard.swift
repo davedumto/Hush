@@ -336,7 +336,7 @@ struct ExpandedCard: View {
         Circle()
             .fill(Theme.Semantic.cardFrame)
             .frame(width: diameter, height: diameter)
-            .overlay { markGlyph(size: 20, color: colorScheme == .dark ? Color.white : Theme.Brand.navy) }
+            .overlay { tabGlyph(size: 20) }
             .contentShape(Circle())
             .position(cornerTabPosition)
             .frame(width: cardSize.width, height: cardSize.height)
@@ -390,7 +390,22 @@ struct ExpandedCard: View {
     // (top/bottom used to show it alongside the mark; §4's own "HushMark 20 only" was already the
     // rule for side docks, now applied uniformly instead of only there).
     private var tabContent: some View {
-        markGlyph(size: 20, color: colorScheme == .dark ? Color.white : Theme.Brand.navy)
+        tabGlyph(size: 20)
+    }
+
+    /// Owner spec, 2026-10-25: "when media is playing, the logo icon when the tray is open should
+    /// have that waveform vibe too" — the tab/corner-tab's own brand mark swaps to the same shared
+    /// `AnimatedWaveformBars` CollapsedPill and NotchExtensionBar already use, same as
+    /// CollapsedPill.primaryVisual's own swap. Both tab call sites (`cornerTab`, `tabContent`) route
+    /// through here so neither one can drift out of sync with the other.
+    @ViewBuilder
+    private func tabGlyph(size: CGFloat) -> some View {
+        let color = colorScheme == .dark ? Color.white : Theme.Brand.navy
+        if state.isMediaPlaying {
+            AnimatedWaveformBars(height: size, tint: color)
+        } else {
+            markGlyph(size: size, color: color)
+        }
     }
 
     /// HushArchTemplate (tintable) + a hand-drawn orange dot, same technique CollapsedPill uses —

@@ -78,6 +78,13 @@ struct PillVariant: Equatable {
     let photo: Photo
     let photoOpacity: Double
     let battery: Battery
+    /// Owner spec, 2026-10-25: "imagine [NotchExtensionBar's animated waveform] on the island
+    /// where that headphone image will be but on media play, it switches to the audio waveform."
+    /// Mirrors NotchExtensionBar's own `isMediaPlaying` (ultimately HeadphoneState.isMediaPlaying)
+    /// — resolved here, not read raw by CollapsedPill, same as every other fact above. Defaulted
+    /// so every existing `resolve(...)` call site (every preview, PreviewSnapshotHarness) keeps
+    /// compiling unchanged at its old "not playing" behavior.
+    let isMediaPlaying: Bool
 
     /// design/DESIGN_GUIDE.md §3 "Low battery (under 15%)" and §10's "Low battery threshold |
     /// under 15%" — 15 itself is NOT low, only strictly below it.
@@ -88,12 +95,16 @@ struct PillVariant: Equatable {
         connection: PillConnectionState,
         batteryPercent: Int?,
         theme: PillTheme,
-        dock: PillDock
+        dock: PillDock,
+        isMediaPlaying: Bool = false
     ) -> PillVariant {
         let effectiveTheme: PillTheme = dock.isNotch ? .dark : theme
 
         guard case .matched(let photoNames) = device else {
-            return PillVariant(dock: dock, theme: effectiveTheme, photo: .noDevice, photoOpacity: 1, battery: .none)
+            return PillVariant(
+                dock: dock, theme: effectiveTheme, photo: .noDevice, photoOpacity: 1, battery: .none,
+                isMediaPlaying: isMediaPlaying
+            )
         }
 
         // Contrast flip (§3): white headphones on the black pill, black headphones on the white
@@ -104,16 +115,23 @@ struct PillVariant: Equatable {
         } ?? .genericMark
 
         if connection == .connecting {
-            return PillVariant(dock: dock, theme: effectiveTheme, photo: photo, photoOpacity: 0.35, battery: .spinner)
+            return PillVariant(
+                dock: dock, theme: effectiveTheme, photo: photo, photoOpacity: 0.35, battery: .spinner,
+                isMediaPlaying: isMediaPlaying
+            )
         }
 
         guard let percent = batteryPercent else {
-            return PillVariant(dock: dock, theme: effectiveTheme, photo: photo, photoOpacity: 1, battery: .none)
+            return PillVariant(
+                dock: dock, theme: effectiveTheme, photo: photo, photoOpacity: 1, battery: .none,
+                isMediaPlaying: isMediaPlaying
+            )
         }
 
         return PillVariant(
             dock: dock, theme: effectiveTheme, photo: photo, photoOpacity: 1,
-            battery: .bar(percent: percent, isLow: percent < lowBatteryThreshold)
+            battery: .bar(percent: percent, isLow: percent < lowBatteryThreshold),
+            isMediaPlaying: isMediaPlaying
         )
     }
 }

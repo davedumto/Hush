@@ -33,14 +33,21 @@ struct NotchExtensionBar: View {
     @ViewBuilder
     private var noiseModeIcon: some View {
         if isMediaPlaying {
-            // Owner request, 2026-10-25 (round 2 — "not the bars", keep the waveform icon, "just
-            // animate it differently": `.variableColor` cycled which bars were *tinted*, read as a
-            // color flicker, not the lines themselves growing/shrinking). SF Symbols' "variable
-            // value" feature is built for exactly this — `Image(systemName:variableValue:)` on a
-            // symbol like "waveform" changes how tall each line renders for a given 0...1 value;
-            // animating that value is the lines-growing-and-shrinking "playing waveform" look,
-            // using the same icon and the same `icon(_:)`-matching size as every other state here.
-            AnimatedWaveformIcon(height: height)
+            // Owner request, 2026-10-25 (round 3 — "this is what I wanted on the notch" too, after
+            // seeing CollapsedPill's own version land): the same shared `AnimatedWaveformBars` now
+            // used on Island mode's pill, instead of this bar's own SF-Symbol-based attempt — see
+            // AnimatedWaveformBars's own doc comment for why an SF Symbol bounce/variable-value
+            // effect (both tried and rejected here first) lost out to five hand-drawn, hand-animated
+            // bars once Island mode needed its own version too.
+            // `icon(_:)` below draws every other glyph in this bar at `height * 0.5` inside a
+            // `height x height` layout slot — passing `AnimatedWaveformBars` the full `height`
+            // instead made it render roughly 2x the size of every icon beside it (owner-reported,
+            // 2026-10-25: "it looks shitty... adjust the size to be the size of what it was").
+            // Matching that same 0.5 scale, then re-wrapping in the same `height x height` slot,
+            // keeps this icon's on-screen size identical to what it replaced without disturbing
+            // the HStack's own left/right wing layout.
+            AnimatedWaveformBars(height: height * 0.5, tint: .white)
+                .frame(width: height, height: height)
         } else {
             switch noiseMode {
             case .off: icon("IconOff")
@@ -113,30 +120,6 @@ struct NotchExtensionBar: View {
             .foregroundStyle(.white)
             .frame(width: height * 0.5, height: height * 0.5)
             .frame(width: height, height: height)
-    }
-}
-
-/// `noiseModeIcon`'s own doc comment: the "waveform" SF Symbol. Two animation styles were tried
-/// and rejected here before this one (owner feedback both times) — `.symbolEffect(.variableColor)`
-/// (read as a color flicker) and animating the symbol's own variable value (apparently didn't
-/// render as a visible height change for this particular symbol). Owner picked "Bounce" from a
-/// concrete set of options: `.symbolEffect(.bounce)`, repeating — the icon pops upward and settles
-/// back, on a loop, while media plays. Same sizing as `icon(_:)`/`systemIcon(_:)` so it doesn't
-/// read as a different scale than the icon it replaces.
-private struct AnimatedWaveformIcon: View {
-    let height: CGFloat
-    @State private var bounceTrigger = 0
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        Image(systemName: "waveform")
-            .resizable()
-            .scaledToFit()
-            .foregroundStyle(.white)
-            .frame(width: height * 0.5, height: height * 0.5)
-            .frame(width: height, height: height)
-            .symbolEffect(.bounce.up, options: reduceMotion ? .nonRepeating : .repeat(.continuous), value: bounceTrigger)
-            .onAppear { bounceTrigger += 1 }
     }
 }
 

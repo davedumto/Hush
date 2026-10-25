@@ -1207,13 +1207,33 @@ final class NotchPanel: NSPanel {
             // overflow the real screen edge — not just the invisible shadow-margin envelope, but far
             // enough to get hard-clipped by the OS, which is what read as "part of it is hidden."
             var frame = geometry.frame(for: size)
-            if symmetric { frame.origin.y += Self.shadowMargin }
+            // Owner-reported, 2026-10-25: "the notch comes into the screen on collapse" — on
+            // collapse, the settled pill's frame (symmetric: true) landed 40pt (exactly
+            // `shadowMargin`) above the real screen top, confirmed live via DIAG logging twice:
+            // `screenTop=1112` but `computed`/`actual` frame had `origin.y + height == 1152`.
+            // Root cause: `IslandGeometry.frame(for:)`'s own `origin.y` formula
+            // (`screen.maxY - floatingDrop - size.height`) already pins the top edge flush to the
+            // real screen top *for any `size`* — size-independent by construction — so
+            // `restingEnvelopeSize(for:edge:symmetric: true)` already padding `size`'s height by
+            // `shadowMargin * 2` (margin on both top and bottom) has nowhere to put the "top" half
+            // of that margin except below the flush top edge anyway. Shifting the frame up by one
+            // more `shadowMargin` here double-applies that same margin for the non-notched path —
+            // confirmed, with real numbers, not present for the notched early-return path below
+            // (an earlier attempt to delete this line outright for *every* path broke that one:
+            // "it is now not in the notch again" — `guard !geometry.isNotched else { return frame
+            // }` returns *before* `adaptiveOffset` ever runs, making this the ONLY position
+            // adjustment a notched display's collapsed bar gets, for reasons specific to that path
+            // that don't carry over here). So: still applied for the notched return below,
+            // deliberately skipped for the non-notched path that showed the real, confirmed bug.
+            if geometry.isNotched {
+                if symmetric { frame.origin.y += Self.shadowMargin }
+                return frame
+            }
             // Owner-reported, 2026-10-25: a real notch's fused bar is meant to stay permanently
             // centered on the notch, not draggable along the edge — any `offset` persisted from
             // when the top dock was still a plain draggable pill (before this feature existed)
             // would otherwise still get applied here, visibly shifting the bar off-center from
             // the real notch for no reason the user did on *this* build.
-            guard !geometry.isNotched else { return frame }
             let adaptiveOffset: CGFloat
             if let range = DockPlacement.offsetRange(forSize: size, edge: edge, visibleFrame: visibleFrame, margin: 8) {
                 adaptiveOffset = min(max(offset, range.lowerBound), range.upperBound)
@@ -1434,7 +1454,29 @@ final class NotchPanel: NSPanel {
         let cardTransitionKind = expanded
             ? MotionConstants.expandTransitionKind(reduceMotion: reduceMotion)
             : MotionConstants.collapseTransitionKind(reduceMotion: reduceMotion)
-        withAnimation(cardTransitionKind.animation, completionCriteria: .logicallyComplete) {
+        // Owner-reported, 2026-10-25: "the notch comes into the screen on collapse" — the card
+        // floating loose mid-swing before snapping into place. Confirmed via diagnostic logging:
+        // the bug only ever reproduced under the spring curve, never Reduce Motion's plain
+        // crossfade, and survived forcing `cardTransition` itself to plain opacity — ruling out
+        // `.scale(anchor:)` and pointing at the animation curve/completion timing instead.
+        // `.logicallyComplete` fires before a spring/`combined(with:)` transition has actually
+        // finished settling/removing itself on screen in general (not just an overshooting one —
+        // the collapse spring itself is critically damped, no overshoot, and still showed this);
+        // the completion handler below snaps the real AppKit window frame to its final small size,
+        // so it needs the later, more conservative `.removed` to avoid firing while the transition
+        // is still visually catching up.
+        //
+        // A later attempt to decouple `isAnimating` (gates `isPillVisible`) onto an earlier timer,
+        // so the pill wouldn't wait through `.removed`'s longer margin with nothing on screen
+        // (owner-reported, same day: "on collapse the notch hides for a second, and the tray has
+        // disappeared"), made things *worse*, not better (owner-reported, same day: "it is now
+        // displacing again") — it let the pill become visible, ZStack-aligned within the window,
+        // *before* the frame-snap below had actually shrunk that window down to its true small
+        // target, so the pill rendered flush-top within a window that was still card-sized. Both
+        // symptoms need the SAME completion to fire at the SAME moment; the "pill disappears for a
+        // moment" gap is accepted as-is for now rather than risk reintroducing the floating bug
+        // again — don't decouple these two without a fundamentally different mechanism.
+        withAnimation(cardTransitionKind.animation, completionCriteria: .removed) {
             uiState.isExpanded = expanded
         } completion: { [weak self] in
             guard let self, generation == self.presentGeneration else { return }

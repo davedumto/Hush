@@ -111,19 +111,31 @@ struct CollapsedPill: View {
 
     @ViewBuilder
     private var primaryVisual: some View {
-        switch variant.photo {
-        case .device(let assetName):
-            Image(assetName)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(height: 26 * scale)
-                .opacity(variant.photoOpacity)
-                .saturation(variant.photoOpacity < 1 ? 0 : 1) // connecting: desaturated, not just faded
-                // §9.1 point 5: flies/grows into ExpandedCard's hero photo on expand — see that
-                // view's own doc comment on `photoNamespace`. Skipped under Reduce Motion (§9.6).
-                .modifier(PhotoFlight(namespace: reduceMotion ? nil : photoNamespace))
-        case .genericMark, .noDevice:
-            markView(dotOpacity: 1)
+        // Owner spec, 2026-10-25: "imagine [NotchExtensionBar's waveform] on the island where that
+        // headphone image will be but on media play, it switches to the audio waveform." Takes
+        // over from the photo/mark entirely while media plays, same as NotchExtensionBar's own
+        // noiseModeIcon swap — not layered on top of it.
+        if variant.isMediaPlaying {
+            AnimatedWaveformBars(
+                height: 20 * scale,
+                tint: variant.theme == .dark ? .white : Theme.Brand.navy
+            )
+        } else {
+            switch variant.photo {
+            case .device(let assetName):
+                Image(assetName)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(height: 26 * scale)
+                    .opacity(variant.photoOpacity)
+                    .saturation(variant.photoOpacity < 1 ? 0 : 1) // connecting: desaturated, not just faded
+                    // §9.1 point 5: flies/grows into ExpandedCard's hero photo on expand — see
+                    // that view's own doc comment on `photoNamespace`. Skipped under Reduce
+                    // Motion (§9.6).
+                    .modifier(PhotoFlight(namespace: reduceMotion ? nil : photoNamespace))
+            case .genericMark, .noDevice:
+                markView(dotOpacity: 1)
+            }
         }
     }
 
@@ -374,6 +386,26 @@ struct QuarterCircleShape: InsettableShape {
     CollapsedPill(variant: .resolve(
         device: .matched(photo: HeadphonePhotoAssetNames(black: "Tune770Black", white: "Tune770White")),
         connection: .connected, batteryPercent: 82, theme: .light, dock: .bottom
+    ))
+    .padding(40)
+    .background(Color.white)
+}
+
+#Preview("Media Playing - Dark") {
+    CollapsedPill(variant: .resolve(
+        device: .matched(photo: HeadphonePhotoAssetNames(black: "Tune770Black", white: "Tune770White")),
+        connection: .connected, batteryPercent: 82, theme: .dark, dock: .top(isNotched: false),
+        isMediaPlaying: true
+    ))
+    .padding(40)
+    .background(Color.black)
+}
+
+#Preview("Media Playing - Light") {
+    CollapsedPill(variant: .resolve(
+        device: .matched(photo: HeadphonePhotoAssetNames(black: "Tune770Black", white: "Tune770White")),
+        connection: .connected, batteryPercent: 82, theme: .light, dock: .top(isNotched: false),
+        isMediaPlaying: true
     ))
     .padding(40)
     .background(Color.white)

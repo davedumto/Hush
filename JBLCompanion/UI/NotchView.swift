@@ -243,6 +243,13 @@ struct NotchView: View {
     /// semi-transparent smear well past the card's own bounds instead of a soft edge. Scale + fade
     /// alone already reads as the card growing in; it just doesn't start in soft focus.
     private var cardTransition: AnyTransition {
+        // Diagnostic, 2026-10-25: forcing `.opacity` unconditionally here (bypassing `scale`
+        // entirely) still reproduced the "card floats mid-screen on collapse" bug — ruling out
+        // `.scale(anchor:)` as the cause. The real variable distinguishing "bug happens" from
+        // "bug doesn't happen" isn't the transition shape at all, it's Reduce Motion's *animation
+        // curve* swap (NotchPanel.present()'s `cardTransitionKind`: spring vs. plain crossfade) —
+        // see that function's own `completionCriteria: .logicallyComplete` for where that's
+        // actually being chased down next.
         guard !reduceMotion else { return .opacity }
         return AnyTransition
             .scale(scale: MotionConstants.cardTransitionScale, anchor: cardTransitionAnchor)
@@ -328,7 +335,8 @@ struct NotchView: View {
             connection: isConnecting ? .connecting : .connected,
             batteryPercent: state.batteryPercent,
             theme: colorScheme == .dark ? .dark : .light,
-            dock: dockEdge().pillDock(isNotched: isNotched())
+            dock: dockEdge().pillDock(isNotched: isNotched()),
+            isMediaPlaying: state.isMediaPlaying
         )
     }
 
