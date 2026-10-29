@@ -68,6 +68,7 @@ final class NotchPanel: NSPanel {
     private let onSetMaxVolumeLimiter: (Bool) -> Void
     private let canUseVoicePrompt: () -> Bool
     private let onSetVoicePrompt: (Bool) -> Void
+    private let todayListeningSeconds: () -> TimeInterval
     private let onIslandSettingsChanged: () -> Void
 
     private let silhouette = NotchSilhouetteView(frame: .zero)
@@ -244,6 +245,7 @@ final class NotchPanel: NSPanel {
         onSetMaxVolumeLimiter: @escaping (Bool) -> Void = { _ in },
         canUseVoicePrompt: @escaping () -> Bool = { false },
         onSetVoicePrompt: @escaping (Bool) -> Void = { _ in },
+        todayListeningSeconds: @escaping () -> TimeInterval = { 0 },
         onIslandSettingsChanged: @escaping () -> Void = {}
     ) {
         self.headphoneState = headphoneState
@@ -262,6 +264,7 @@ final class NotchPanel: NSPanel {
         self.onSetMaxVolumeLimiter = onSetMaxVolumeLimiter
         self.canUseVoicePrompt = canUseVoicePrompt
         self.onSetVoicePrompt = onSetVoicePrompt
+        self.todayListeningSeconds = todayListeningSeconds
         self.onIslandSettingsChanged = onIslandSettingsChanged
 
         let resolution = Self.resolveScreen()
@@ -362,6 +365,7 @@ final class NotchPanel: NSPanel {
                 onSelectEqualizerPreset: onSelectEqualizerPreset, onSetEqualizerOn: onSetEqualizerOn,
                 canUseMaxVolumeLimiter: canUseMaxVolumeLimiter, onSetMaxVolumeLimiter: onSetMaxVolumeLimiter,
                 canUseVoicePrompt: canUseVoicePrompt, onSetVoicePrompt: onSetVoicePrompt,
+                todayListeningSeconds: todayListeningSeconds,
                 onIslandSettingsChanged: onIslandSettingsChanged
             )
         )

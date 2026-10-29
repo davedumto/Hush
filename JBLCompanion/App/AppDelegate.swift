@@ -58,6 +58,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// (SUEnableAutomaticChecks/SUScheduledCheckInterval, also in Info.plist), independent of
     /// whether the user ever opens "Check for Updates…" themselves.
     private lazy var updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+    /// Owner spec, 2026-10-28: "the shortcut for turning on anc with just your keyboard" —
+    /// started in `applicationDidFinishLaunching`, stopped in `applicationWillTerminate`. See
+    /// GlobalHotKeyMonitor's own doc comment for why this is Carbon-based rather than an
+    /// `NSEvent` global monitor.
+    private let globalHotKeyMonitor = GlobalHotKeyMonitor()
+    /// Owner spec, 2026-10-28: "listening time stats" — media playing while connected, tracked
+    /// across every connect/disconnect/play/pause transition via `updateListeningTimeTracking()`.
+    private let listeningTimeTracker = ListeningTimeTracker()
+    /// Owner spec, 2026-10-29: "if i turn on dnd, it goes to noise cancellation" —
+    /// `FocusModeWatcher`'s own doc comment has the full detection story (not
+    /// `SetFocusFilterIntent`/App Intents — confirmed dead on this machine's macOS after two
+    /// separate implementation attempts).
+    private let focusFilterNoiseModeCoordinator = FocusFilterNoiseModeCoordinator()
+    private let focusModeWatcher = FocusModeWatcher()
 
     /// Island Settings/FeedbackView are real restorable `Window` scenes (JBLCompanionApp.swift),
     /// so macOS's own window-state restoration reopens whichever one was left open the moment the
@@ -98,6 +112,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startObservingHeadphoneStateForMenuBarIcon()
         startObservingMediaPlayback()
 
+        // Owner spec, 2026-10-28: Control+Option+A requests ANC from anywhere, the same
+        // isModeVerified-gated path ModeButtonsSection's own ANC button tap uses — skipped
+        // outright (not attempted and silently refused by WriteGuard's allowlist) when the
+        // matched profile hasn't hardware-confirmed an ANC command frame.
+        globalHotKeyMonitor.onTriggered = { [weak self] in
+            guard let self, self.isModeVerified(.anc) else { return }
+            self.requestNoiseMode(.anc)
+        }
+        globalHotKeyMonitor.start()
+
+        // Owner spec, 2026-10-29: "if i turn on dnd, it goes to noise cancellation" —
+        // `FocusModeWatcher`'s own doc comment has the full detection story. `onDoNotDisturbChanged`
+        // already dispatches on the main queue.
+        focusModeWatcher.onDoNotDisturbChanged = { [weak self] active in
+            self?.applyFocusFilterANC(active: active)
+        }
+        focusModeWatcher.onPermissionDenied = { [weak self] in
+            self?.showFocusFilterPermissionPromptIfNeeded()
+        }
+        focusModeWatcher.start()
+
         classicMonitor.delegate = self
 
         let panel = NotchPanel(
@@ -117,6 +152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onSetMaxVolumeLimiter: { [weak self] on in self?.requestSetMaxVolumeLimiter(on) },
             canUseVoicePrompt: { [weak self] in self?.canUseVoicePrompt ?? false },
             onSetVoicePrompt: { [weak self] on in self?.requestSetVoicePrompt(on) },
+            todayListeningSeconds: { [weak self] in self?.listeningTimeTracker.currentTotalSeconds() ?? 0 },
             onIslandSettingsChanged: { [weak self] in self?.notchSettingsDidChange() }
         )
         self.panel = panel
@@ -134,6 +170,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// it should keep running with no windows open, same as it does before Island Settings is ever
     /// opened for the first time.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    /// Carbon's hotkey registration would be reclaimed by the OS on process exit regardless, but
+    /// explicit teardown is still the correct practice rather than relying on that.
+    func applicationWillTerminate(_ notification: Notification) {
+        globalHotKeyMonitor.stop()
+        focusModeWatcher.stop()
+    }
 
     /// RequiredFonts.postScriptNames (design/DESIGN_GUIDE.md §2) should already be registered via
     /// ATSApplicationFontsPath (project.yml) by the time this runs — this only verifies that
@@ -251,9 +294,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// this runs) and kept live via `onChange` for every change after.
     private func startObservingMediaPlayback() {
         headphoneState.isMediaPlaying = MediaPlaybackMonitor.shared.isPlaying
+        updateListeningTimeTracking()
         MediaPlaybackMonitor.shared.onChange = { [weak self] isPlaying in
-            Task { @MainActor [weak self] in self?.headphoneState.isMediaPlaying = isPlaying }
+            Task { @MainActor [weak self] in
+                self?.headphoneState.isMediaPlaying = isPlaying
+                self?.updateListeningTimeTracking()
+            }
         }
+    }
+
+    /// `ListeningTimeTracker`'s own doc comment: edge-triggered, called from every place
+    /// `headphoneState.connection`/`isMediaPlaying` actually changes, not polled — this is the
+    /// one place that recomputes the combined "media playing while connected" condition those
+    /// four call sites all funnel through.
+    private func updateListeningTimeTracking() {
+        listeningTimeTracker.setListening(headphoneState.isMediaPlaying && headphoneState.connection == .connected)
     }
 
     /// Called by FallbackMenuView — the fallback popover's own "Island Settings…" row.
@@ -334,6 +389,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func requestNoiseMode(_ mode: CommandableNoiseMode) {
         activeSession?.noiseModeCoordinator.requestMode(mode)
+    }
+
+    /// `FocusModeWatcher.onDoNotDisturbChanged`'s own call site — `active`: whether Do Not
+    /// Disturb just turned on (`true`) or off (`false`).
+    func applyFocusFilterANC(active: Bool) {
+        guard let mode = focusFilterNoiseModeCoordinator.modeToRequest(whenFocusActive: active, currentMode: currentCommandableNoiseMode) else { return }
+        requestNoiseMode(mode)
+    }
+
+    /// `FocusModeWatcher.onPermissionDenied`'s own call site. There is no programmatic Full Disk
+    /// Access request API (`FocusModeWatcher`'s own doc comment has the confirmation) — this is
+    /// the best an app can do: explain why, then jump straight to the right System Settings pane
+    /// rather than leaving the user to find it themselves. Shown once ever (not once per launch),
+    /// via `hasShownFocusFilterFDAPromptKey` — reopening Hush every day shouldn't re-nag someone
+    /// who's already seen and dismissed it, including someone who saw it and chose not to grant
+    /// access on purpose.
+    private static let hasShownFocusFilterFDAPromptKey = "hasShownFocusFilterFDAPrompt"
+    /// Held onto so the window isn't deallocated the instant this method returns — `NSWindow`
+    /// doesn't keep itself alive the way a SwiftUI `Window` scene does.
+    private var focusFilterPermissionPromptWindow: NSWindow?
+
+    private func showFocusFilterPermissionPromptIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: Self.hasShownFocusFilterFDAPromptKey) else { return }
+        defaults.set(true, forKey: Self.hasShownFocusFilterFDAPromptKey)
+
+        let window = NSWindow(
+            contentRect: .zero, styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered, defer: false
+        )
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.isReleasedWhenClosed = false
+        window.isMovableByWindowBackground = true
+        window.level = .floating
+        window.contentView = NSHostingView(rootView: FocusFilterPermissionPromptView(
+            onOpenSettings: { [weak self] in
+                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
+                self?.focusFilterPermissionPromptWindow?.close()
+                self?.focusFilterPermissionPromptWindow = nil
+            },
+            onDismiss: { [weak self] in
+                self?.focusFilterPermissionPromptWindow?.close()
+                self?.focusFilterPermissionPromptWindow = nil
+            }
+        ))
+        window.center()
+        focusFilterPermissionPromptWindow = window
+
+        // Hush is an `LSUIElement` accessory app with no Dock icon/foreground presence by
+        // default — without this, a freshly-created window can appear behind other apps instead
+        // of being brought to the user's attention.
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    /// `HeadphoneState.noiseMode` includes `.unknown` (nothing reported yet), which
+    /// `CommandableNoiseMode` has no case for — falls back to `.off` there, a reasonable default
+    /// for "what mode to restore" if the Focus Filter ever activates before any real status event
+    /// has arrived.
+    private var currentCommandableNoiseMode: CommandableNoiseMode {
+        switch headphoneState.noiseMode {
+        case .off: return .off
+        case .anc: return .anc
+        case .talkThru: return .talkThru
+        case .ambientAware: return .ambientAware
+        case .unknown: return .off
+        }
     }
 
     /// DeviceProfile.isPowerOffVerified's own doc comment — gates ExpandedCard's IconPower button.
@@ -546,6 +669,7 @@ extension AppDelegate: ClassicConnectionMonitorDelegate {
         session.rfcommLink.delegate = self
 
         headphoneState.connection = .connected
+        updateListeningTimeTracking()
         headphoneState.deviceName = profile.displayName
         headphoneState.photoAssetNames = profile.photoAssetNames
         headphoneState.modelNumberText = profile.modelNumberText
@@ -565,6 +689,7 @@ extension AppDelegate: ClassicConnectionMonitorDelegate {
 
     func classicConnectionMonitorDidDisconnect(_ monitor: ClassicConnectionMonitor) {
         headphoneState.connection = .disconnected
+        updateListeningTimeTracking()
         headphoneState.batteryPercent = nil
         headphoneState.batteryPercentIsUnverifiedZero = false
         headphoneState.deviceName = ""

@@ -79,6 +79,11 @@ struct ExpandedCard: View {
     var onSetMaxVolumeLimiter: (Bool) -> Void = { _ in }
     var canUseVoicePrompt: Bool = false
     var onSetVoicePrompt: (Bool) -> Void = { _ in }
+    /// Owner spec, 2026-10-28: "listening time stats" — total seconds today where media was
+    /// playing AND the headphones were connected simultaneously (ListeningTimeTracker's own doc
+    /// comment). Shown in the footer, `footer`'s own doc comment on why it's appended there
+    /// rather than threaded through `CardConditionResolver.footerRightText`.
+    var todayListeningSeconds: TimeInterval = 0
     /// Bumped by NotchPanel.requestOpenIslandSettings() (the fallback NSStatusItem menu's own
     /// "Island Settings…" item — NotchUIState.islandSettingsRequestToken's own doc comment) —
     /// jumps straight to the in-tray Island Settings sheet, skipping the picker, since that's the
@@ -1078,18 +1083,67 @@ struct ExpandedCard: View {
 
     // MARK: - Footer
 
+    /// Owner spec, 2026-10-28: "listening time stats." Appended next to the existing right-hand
+    /// label ("SYNCED" etc.) rather than folded into `CardConditionResolver.footerRightText(for:)`
+    /// itself — that function's own signature is a pure function of `condition` alone, asserted on
+    /// directly by `CardConditionResolverTests`, and the listening stat is neither derived from
+    /// nor varies with `condition` (it's a standalone, always-available number), so composing it
+    /// here at the view layer is the smaller, safer diff. Omitted entirely when there's nothing to
+    /// show yet (`todayListeningSeconds == 0`) rather than showing "0m," which would read as
+    /// broken on a fresh install/new day rather than simply "nothing listened to yet."
+    // Owner request, 2026-10-29: "remove the synced text and the handshake text too" — the
+    // right-hand status word (IDLE/HANDSHAKE/SYNCED, per condition) is gone from every condition,
+    // not just two of the three; `CardConditionResolver.footerRightText(for:)` is removed with it
+    // since this was its only caller.
     private var footer: some View {
-        HStack {
+        HStack(spacing: 8) {
             Text(CardConditionResolver.footerLeftText(for: condition))
                 .font(Theme.Fonts.eyebrow)
                 .tracking(1.5)
                 .foregroundStyle(Theme.Semantic.textSecondary.opacity(0.8))
             Spacer(minLength: 0)
-            Text(CardConditionResolver.footerRightText(for: condition))
-                .font(Theme.Fonts.eyebrow)
-                .tracking(1.5)
-                .foregroundStyle(Theme.Semantic.textSecondary.opacity(0.8))
+            listeningTimeChip
         }
+    }
+
+    /// Owner request, 2026-10-29: a small glassFill capsule — the same chip language
+    /// `batteryChipView`/`powerOffSheetButton` already use elsewhere in this card — gives the
+    /// listening-time stat its own visual weight instead of blending into the plain footer
+    /// labels, without adding a whole new row: the card's own fixed 500pt height budget
+    /// (`cardSize`'s own doc comment) only has ~22pt of slack, not room for another line.
+    /// The info icon + its hover explanation (first `.help(_:)`, then a DIY `.onHover` bubble,
+    /// neither satisfying) were tried and dropped, on request — "7M MEDIA PLAYBACK" reads fine
+    /// on its own without a separate explanation affordance.
+    @ViewBuilder
+    private var listeningTimeChip: some View {
+        if let label = Self.listeningTimeLabel(forSeconds: todayListeningSeconds) {
+            HStack(spacing: 4) {
+                Image(systemName: "headphones")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(label)
+                    .font(Theme.Fonts.eyebrow)
+                    .tracking(0.5)
+            }
+            .foregroundStyle(Theme.Semantic.textSecondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Theme.Semantic.glassFill, in: Capsule())
+            .overlay(Capsule().strokeBorder(Theme.Semantic.glassStroke, lineWidth: 1))
+        }
+    }
+
+    /// `footer`'s own doc comment. `nil` below a full minute — nothing to show yet, not "0M."
+    /// All-caps, matching the footer's existing "BLUETOOTH"/"SYNCED" eyebrow-label convention.
+    /// Owner request, 2026-10-29: "it should be something like 7min media playback" — the bare
+    /// "7M TODAY" read as unexplained; spelling out "MEDIA PLAYBACK" makes the number legible on
+    /// its own, before anyone even hovers the info icon beside it.
+    static func listeningTimeLabel(forSeconds seconds: TimeInterval) -> String? {
+        let totalMinutes = Int(seconds) / 60
+        guard totalMinutes > 0 else { return nil }
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+        guard hours > 0 else { return "\(minutes)M MEDIA PLAYBACK" }
+        return minutes > 0 ? "\(hours)H \(minutes)M MEDIA PLAYBACK" : "\(hours)H MEDIA PLAYBACK"
     }
 }
 

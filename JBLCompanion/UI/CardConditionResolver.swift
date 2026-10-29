@@ -48,14 +48,6 @@ enum CardConditionResolver {
     /// read naturally as "footer text for each condition" (the task's own wording).
     static func footerLeftText(for condition: CardCondition) -> String { "BLUETOOTH" }
 
-    static func footerRightText(for condition: CardCondition) -> String {
-        switch condition {
-        case .noDevice: return "IDLE"
-        case .connecting: return "HANDSHAKE"
-        case .controlsUnavailable, .lowBattery, .connected: return "SYNCED"
-        }
-    }
-
     /// design/DESIGN_GUIDE.md §5 "No headphones": "Last seen: <last matched profile display
     /// name>" — nil (omit the line) when nothing has ever matched, or the name is somehow empty.
     static func lastSeenText(lastMatchedProfileDisplayName: String?) -> String? {

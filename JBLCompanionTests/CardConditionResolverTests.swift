@@ -96,14 +96,6 @@ final class CardConditionResolverTests: XCTestCase {
         }
     }
 
-    func testFooterRightTextPerCondition() {
-        XCTAssertEqual(CardConditionResolver.footerRightText(for: .noDevice), "IDLE")
-        XCTAssertEqual(CardConditionResolver.footerRightText(for: .connecting), "HANDSHAKE")
-        XCTAssertEqual(CardConditionResolver.footerRightText(for: .controlsUnavailable), "SYNCED")
-        XCTAssertEqual(CardConditionResolver.footerRightText(for: .lowBattery), "SYNCED")
-        XCTAssertEqual(CardConditionResolver.footerRightText(for: .connected), "SYNCED")
-    }
-
     // MARK: - "Last seen" text
 
     func testLastSeenTextWrapsTheProfileName() {

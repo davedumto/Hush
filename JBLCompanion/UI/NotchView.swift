@@ -166,6 +166,9 @@ struct NotchView: View {
     let onSetMaxVolumeLimiter: (Bool) -> Void
     let canUseVoicePrompt: () -> Bool
     let onSetVoicePrompt: (Bool) -> Void
+    /// Owner spec, 2026-10-28: "listening time stats" — `ListeningTimeTracker.currentTotalSeconds()`,
+    /// so every call picks up any in-progress session live, not just the last-completed one.
+    let todayListeningSeconds: () -> TimeInterval
     /// AppDelegate.notchSettingsDidChange() — same callback Island Settings already triggers on
     /// every change.
     let onIslandSettingsChanged: () -> Void
@@ -356,6 +359,7 @@ struct NotchView: View {
             hasRealNotchOnCurrentDisplay: hasRealNotchOnCurrentDisplay, currentDisplayUUID: currentDisplayUUID,
             canUseMaxVolumeLimiter: canUseMaxVolumeLimiter(), onSetMaxVolumeLimiter: onSetMaxVolumeLimiter,
             canUseVoicePrompt: canUseVoicePrompt(), onSetVoicePrompt: onSetVoicePrompt,
+            todayListeningSeconds: todayListeningSeconds(),
             openIslandSettingsRequestToken: uiState.islandSettingsRequestToken
         )
     }
