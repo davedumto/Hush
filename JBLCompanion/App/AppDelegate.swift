@@ -122,16 +122,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         globalHotKeyMonitor.start()
 
-        // Owner spec, 2026-10-29: "if i turn on dnd, it goes to noise cancellation" —
-        // `FocusModeWatcher`'s own doc comment has the full detection story. `onDoNotDisturbChanged`
-        // already dispatches on the main queue.
+        // Owner spec, 2026-10-29: "if i turn on dnd, it goes to noise cancellation", then
+        // "there should be somewhere in the island settings that will have a toggle" — off by
+        // default (`IslandSettings.Key.focusFilterANCOnDND`'s own doc comment), started here only
+        // if already on from a previous launch. `FocusModeWatcher`'s own doc comment has the full
+        // detection story.
         focusModeWatcher.onDoNotDisturbChanged = { [weak self] active in
             self?.applyFocusFilterANC(active: active)
         }
         focusModeWatcher.onPermissionDenied = { [weak self] in
             self?.showFocusFilterPermissionPromptIfNeeded()
         }
-        focusModeWatcher.start()
+        syncFocusFilterWatcherWithSettings()
 
         classicMonitor.delegate = self
 
@@ -364,6 +366,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func notchSettingsDidChange() {
         DispatchQueue.main.async { [weak self] in
             self?.panel?.settingsDidChange()
+            self?.syncFocusFilterWatcherWithSettings()
+        }
+    }
+
+    /// Starts/stops `FocusModeWatcher` to match `IslandSettings.focusFilterANCOnDND`'s current
+    /// value — called at launch (for a toggle already on from a previous session) and every time
+    /// `IslandSettingsControls`' own `onChange(of: focusFilterANCOnDND)` fires `onSettingsChanged`.
+    /// Starting it is what actually surfaces the Full Disk Access prompt if needed
+    /// (`FocusModeWatcher.onPermissionDenied`), satisfying "when that toggle is switched on, check
+    /// for if the access is given if not, open the popup" at the moment the user opts in, not
+    /// before.
+    private func syncFocusFilterWatcherWithSettings() {
+        if IslandSettings.focusFilterANCOnDND {
+            focusModeWatcher.start()
+        } else {
+            focusModeWatcher.stop()
         }
     }
 
@@ -401,19 +419,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `FocusModeWatcher.onPermissionDenied`'s own call site. There is no programmatic Full Disk
     /// Access request API (`FocusModeWatcher`'s own doc comment has the confirmation) — this is
     /// the best an app can do: explain why, then jump straight to the right System Settings pane
-    /// rather than leaving the user to find it themselves. Shown once ever (not once per launch),
-    /// via `hasShownFocusFilterFDAPromptKey` — reopening Hush every day shouldn't re-nag someone
-    /// who's already seen and dismissed it, including someone who saw it and chose not to grant
-    /// access on purpose.
-    private static let hasShownFocusFilterFDAPromptKey = "hasShownFocusFilterFDAPrompt"
-    /// Held onto so the window isn't deallocated the instant this method returns — `NSWindow`
-    /// doesn't keep itself alive the way a SwiftUI `Window` scene does.
+    /// rather than leaving the user to find it themselves. Shown every time `syncFocusFilterWatcherWithSettings()`
+    /// tries to start the watcher while access is still missing — which, now that the feature is an
+    /// explicit opt-in toggle (not always-on in the background), means right when the user turns it
+    /// on, and again on a later launch if they turned it on but never actually granted access — not
+    /// gated behind a "shown once ever" flag the way an earlier always-on version of this was,
+    /// since a silently-broken opt-in feature is worse than an occasional reminder. Deduplicated
+    /// against an already-open prompt, not against having shown one before.
     private var focusFilterPermissionPromptWindow: NSWindow?
 
     private func showFocusFilterPermissionPromptIfNeeded() {
-        let defaults = UserDefaults.standard
-        guard !defaults.bool(forKey: Self.hasShownFocusFilterFDAPromptKey) else { return }
-        defaults.set(true, forKey: Self.hasShownFocusFilterFDAPromptKey)
+        guard focusFilterPermissionPromptWindow == nil else { return }
 
         let window = NSWindow(
             contentRect: .zero, styleMask: [.titled, .closable, .fullSizeContentView],
@@ -424,25 +440,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.isReleasedWhenClosed = false
         window.isMovableByWindowBackground = true
         window.level = .floating
-        window.contentView = NSHostingView(rootView: FocusFilterPermissionPromptView(
-            onOpenSettings: { [weak self] in
+        let hostingView = NSHostingView(rootView: FocusFilterPermissionPromptView(
+            onOpenSettings: {
                 NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
-                self?.focusFilterPermissionPromptWindow?.close()
-                self?.focusFilterPermissionPromptWindow = nil
+                window.close()
             },
-            onDismiss: { [weak self] in
-                self?.focusFilterPermissionPromptWindow?.close()
-                self?.focusFilterPermissionPromptWindow = nil
+            onDismiss: {
+                window.close()
             }
         ))
-        window.center()
+        window.contentView = hostingView
+        window.setContentSize(hostingView.fittingSize)
+        positionFocusFilterPermissionPromptWindow(window)
         focusFilterPermissionPromptWindow = window
+
+        // Covers every way the window can close — the in-view buttons above (via `window.close()`)
+        // and the titlebar's own close button alike — so `focusFilterPermissionPromptWindow`'s
+        // dedupe guard in `showFocusFilterPermissionPromptIfNeeded()` never gets stuck pointing at
+        // a window that's already gone.
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            self?.focusFilterPermissionPromptWindow = nil
+        }
 
         // Hush is an `LSUIElement` accessory app with no Dock icon/foreground presence by
         // default — without this, a freshly-created window can appear behind other apps instead
         // of being brought to the user's attention.
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    /// Owner-reported, 2026-10-29: `window.center()` put this behind the expanded card/tray, since
+    /// that's exactly where the user is looking when this fires (right after flipping the new
+    /// Island Settings toggle on) — positions it just below `panel`'s own current frame instead, so
+    /// it's never hidden behind the very UI the user is mid-interaction with. Falls back to
+    /// screen-centering only if `panel` is somehow nil (shouldn't happen in practice: this prompt
+    /// can only fire after `applicationDidFinishLaunching` has already created `panel`).
+    private func positionFocusFilterPermissionPromptWindow(_ window: NSWindow) {
+        guard let panelFrame = panel?.frame else {
+            window.center()
+            return
+        }
+        let gap: CGFloat = 16
+        let x = panelFrame.midX - window.frame.width / 2
+        let y = panelFrame.minY - gap - window.frame.height
+        window.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
     /// `HeadphoneState.noiseMode` includes `.unknown` (nothing reported yet), which

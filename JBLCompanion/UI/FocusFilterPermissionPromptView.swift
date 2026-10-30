@@ -23,7 +23,7 @@ struct FocusFilterPermissionPromptView: View {
                     .foregroundStyle(Theme.Semantic.textPrimary)
             }
 
-            Text("Hush can automatically switch your headphones to ANC whenever Do Not Disturb turns on, and restore your previous mode when it turns off. macOS only allows reading the file this relies on with Full Disk Access granted — a one-time step, and Hush doesn't use this access for anything else.")
+            Text("Hush can automatically switch your headphones to ANC whenever Do Not Disturb turns on, and restore your previous mode when it turns off. macOS only allows reading the file this relies on with Full Disk Access granted. It's a one-time step, and Hush doesn't use this access for anything else.")
                 .font(Theme.Fonts.subText)
                 .foregroundStyle(Theme.Semantic.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)

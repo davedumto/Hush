@@ -10,6 +10,11 @@ enum IslandSettings {
         static let pillDiameter = "islandPillDiameter"
         static let chosenDisplayUUID = "islandChosenDisplayUUID"
         static let autoExpandOnConnect = "islandAutoExpandOnConnect"
+        /// Owner spec, 2026-10-29: "there should be somewhere in the island settings that will
+        /// have a toggle, activate anc on dnd" — off by default, same opt-in reasoning as
+        /// `autoExpandOnConnect` above. `AppDelegate.syncFocusFilterWatcherWithSettings()` is the
+        /// only thing that reads this outside the settings UI itself.
+        static let focusFilterANCOnDND = "islandFocusFilterANCOnDND"
         /// One key per edge (not per display, unlike dockEdge/dockOffset below) — a "how far from
         /// the top" preference is about the edge itself, not which physical display it's on.
         static func edgeMargin(for edge: DockEdge) -> String { "islandEdgeMargin.\(edge.rawValue)" }
@@ -89,6 +94,12 @@ enum IslandSettings {
     static var autoExpandOnConnect: Bool {
         get { UserDefaults.standard.bool(forKey: Key.autoExpandOnConnect) }
         set { UserDefaults.standard.set(newValue, forKey: Key.autoExpandOnConnect) }
+    }
+
+    /// Off by default — see `Key.focusFilterANCOnDND`'s own doc comment.
+    static var focusFilterANCOnDND: Bool {
+        get { UserDefaults.standard.bool(forKey: Key.focusFilterANCOnDND) }
+        set { UserDefaults.standard.set(newValue, forKey: Key.focusFilterANCOnDND) }
     }
 
     /// `.top` (the only edge reachable before this task) when nothing has been saved yet for this

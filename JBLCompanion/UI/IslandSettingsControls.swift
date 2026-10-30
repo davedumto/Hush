@@ -23,6 +23,7 @@ struct IslandSettingsControls: View {
     @AppStorage(IslandSettings.Key.pillDiameter) private var pillDiameter: Double = Double(DockPlacement.collapsedPillDiameter)
     @AppStorage(IslandSettings.Key.chosenDisplayUUID) private var chosenDisplayUUID: String = ""
     @AppStorage(IslandSettings.Key.autoExpandOnConnect) private var autoExpandOnConnect: Bool = false
+    @AppStorage(IslandSettings.Key.focusFilterANCOnDND) private var focusFilterANCOnDND: Bool = false
 
     /// Mirrors SMAppService.mainApp's own live registration status — not @AppStorage-backed: the
     /// real source of truth lives outside UserDefaults entirely here (in Login Items), so this is
@@ -47,7 +48,8 @@ struct IslandSettingsControls: View {
             sectionLabel("Behavior")
             VStack(spacing: 1) {
                 glassRow(corners: [.topLeft, .topRight], joined: true) { autoExpandRow }
-                glassRow(corners: [.bottomLeft, .bottomRight], joined: true) { launchAtLoginRow }
+                glassRow(corners: [], joined: true) { launchAtLoginRow }
+                glassRow(corners: [.bottomLeft, .bottomRight], joined: true) { focusFilterANCOnDNDRow }
             }
 
             sectionLabel("Display")
@@ -61,6 +63,7 @@ struct IslandSettingsControls: View {
         }
         .onChange(of: pillDiameter) { _, _ in onSettingsChanged() }
         .onChange(of: chosenDisplayUUID) { _, _ in onSettingsChanged() }
+        .onChange(of: focusFilterANCOnDND) { _, _ in onSettingsChanged() }
         .onChange(of: notchAttachmentMode) { _, newValue in
             guard let currentDisplayUUID else { return }
             IslandSettings.setNotchAttachmentMode(newValue, forDisplayUUID: currentDisplayUUID)
@@ -128,6 +131,19 @@ struct IslandSettingsControls: View {
                 .foregroundStyle(Theme.Semantic.textPrimary)
             Spacer()
             OrangeToggle(isOn: $launchAtLogin)
+        }
+    }
+
+    /// Owner spec, 2026-10-29: "activate anc on dnd" — `AppDelegate.syncFocusFilterWatcherWithSettings()`
+    /// is what actually starts/stops `FocusModeWatcher` and checks Full Disk Access when this
+    /// flips, triggered through the same `onSettingsChanged` hook every other row here already uses.
+    private var focusFilterANCOnDNDRow: some View {
+        HStack {
+            Text("Switch to ANC on Do Not Disturb")
+                .font(Theme.Fonts.subText)
+                .foregroundStyle(Theme.Semantic.textPrimary)
+            Spacer()
+            OrangeToggle(isOn: $focusFilterANCOnDND)
         }
     }
 

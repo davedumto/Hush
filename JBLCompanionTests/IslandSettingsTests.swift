@@ -153,4 +153,35 @@ final class IslandSettingsTests: XCTestCase {
             UserDefaults.standard.removeObject(forKey: IslandSettings.Key.autoExpandOnConnect)
         }
     }
+
+    // MARK: - Focus filter: switch to ANC on DND
+
+    /// Same single global `UserDefaults.standard` key, same save/restore reasoning as
+    /// `autoExpandOnConnect` above — this is also a real toggle a developer running the test suite
+    /// might already have set on their own machine.
+    private var savedFocusFilterANCOnDND: Any?
+
+    func testFocusFilterANCOnDNDDefaultsToOff() {
+        savedFocusFilterANCOnDND = UserDefaults.standard.object(forKey: IslandSettings.Key.focusFilterANCOnDND)
+        UserDefaults.standard.removeObject(forKey: IslandSettings.Key.focusFilterANCOnDND)
+        XCTAssertFalse(IslandSettings.focusFilterANCOnDND)
+        restoreFocusFilterANCOnDND()
+    }
+
+    func testFocusFilterANCOnDNDRoundTrips() {
+        savedFocusFilterANCOnDND = UserDefaults.standard.object(forKey: IslandSettings.Key.focusFilterANCOnDND)
+        IslandSettings.focusFilterANCOnDND = true
+        XCTAssertTrue(IslandSettings.focusFilterANCOnDND)
+        IslandSettings.focusFilterANCOnDND = false
+        XCTAssertFalse(IslandSettings.focusFilterANCOnDND)
+        restoreFocusFilterANCOnDND()
+    }
+
+    private func restoreFocusFilterANCOnDND() {
+        if let savedFocusFilterANCOnDND {
+            UserDefaults.standard.set(savedFocusFilterANCOnDND, forKey: IslandSettings.Key.focusFilterANCOnDND)
+        } else {
+            UserDefaults.standard.removeObject(forKey: IslandSettings.Key.focusFilterANCOnDND)
+        }
+    }
 }
