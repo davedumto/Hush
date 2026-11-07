@@ -73,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let focusFilterNoiseModeCoordinator = FocusFilterNoiseModeCoordinator()
     private let focusModeWatcher = FocusModeWatcher()
     private let nowPlayingController = NowPlayingController()
+    private let lowBatteryAlertCoordinator = LowBatteryAlertCoordinator()
 
     /// Island Settings/FeedbackView are real restorable `Window` scenes (JBLCompanionApp.swift),
     /// so macOS's own window-state restoration reopens whichever one was left open the moment the
@@ -156,6 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.headphoneState.nowPlayingSourceAppIcon = icon
         }
         startObservingMediaPlayback()
+        lowBatteryAlertCoordinator.start()
 
         classicMonitor.delegate = self
 
@@ -811,6 +813,7 @@ extension AppDelegate: ClassicConnectionMonitorDelegate {
         updateListeningTimeTracking()
         headphoneState.batteryPercent = nil
         headphoneState.batteryPercentIsUnverifiedZero = false
+        lowBatteryAlertCoordinator.update(batteryPercent: nil, deviceName: headphoneState.deviceName)
         headphoneState.deviceName = ""
         headphoneState.photoAssetNames = nil
         headphoneState.modelNumberText = ""
@@ -839,11 +842,17 @@ extension AppDelegate: BLEBatteryLinkDelegate {
         headphoneState.batteryPercent = result.displayPercent
         headphoneState.batteryPercentIsUnverifiedZero = result.isUnverifiedZero
         headphoneState.lastUpdated = Date()
+        // Skips an unverified-zero reading, BatteryReadingPolicy's own doc comment on why that
+        // 0% isn't trustworthy enough to act on, alert included.
+        if !result.isUnverifiedZero {
+            lowBatteryAlertCoordinator.update(batteryPercent: result.displayPercent, deviceName: headphoneState.deviceName)
+        }
     }
 
     func bleBatteryLinkDidDisconnect(_ link: BLEBatteryLink) {
         headphoneState.batteryPercent = nil
         headphoneState.batteryPercentIsUnverifiedZero = false
+        lowBatteryAlertCoordinator.update(batteryPercent: nil, deviceName: headphoneState.deviceName)
     }
 }
 
