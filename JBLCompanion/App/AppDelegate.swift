@@ -111,7 +111,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // two status items for one app was the actual bug "fallback" implied fixing).
         setupFallbackStatusItem()
         startObservingHeadphoneStateForMenuBarIcon()
-        startObservingMediaPlayback()
 
         // Owner spec, 2026-10-28: Control+Option+A requests ANC from anywhere, the same
         // isModeVerified-gated path ModeButtonsSection's own ANC button tap uses — skipped
@@ -137,10 +136,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         syncFocusFilterWatcherWithSettings()
 
         // Owner spec, 2026-11-07: a media dock in the expanded card's hero area with play/pause/
-        // next/previous for whatever's playing system-wide — NowPlayingController's own doc
-        // comment for the full story (and why this never starts here at launch the way
-        // focusModeWatcher/MediaPlaybackMonitor do; it's started/stopped per-dock-open instead,
-        // from NotchPanel's own onNowPlayingDockToggled below).
+        // next/previous for whatever's playing system-wide, plus (added same day) real artwork in
+        // the notch bar's own left wing whenever media is playing — NowPlayingController's and
+        // updateNowPlayingControllerLifecycle()'s own doc comments for the full story on when this
+        // actually runs. Wired before `startObservingMediaPlayback()` below on purpose: that call
+        // can immediately decide to start the controller (if media's already playing at launch),
+        // and a start before these callbacks exist would silently drop its first update.
         nowPlayingController.onNowPlayingChanged = { [weak self] info in
             guard let self else { return }
             self.headphoneState.nowPlayingTitle = info?.title
@@ -154,6 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         nowPlayingController.onSourceIconResolved = { [weak self] icon in
             self?.headphoneState.nowPlayingSourceAppIcon = icon
         }
+        startObservingMediaPlayback()
 
         classicMonitor.delegate = self
 
@@ -320,10 +322,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startObservingMediaPlayback() {
         headphoneState.isMediaPlaying = MediaPlaybackMonitor.shared.isPlaying
         updateListeningTimeTracking()
+        updateNowPlayingControllerLifecycle()
         MediaPlaybackMonitor.shared.onChange = { [weak self] isPlaying in
             Task { @MainActor [weak self] in
                 self?.headphoneState.isMediaPlaying = isPlaying
                 self?.updateListeningTimeTracking()
+                self?.updateNowPlayingControllerLifecycle()
             }
         }
     }
@@ -441,16 +445,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// NotchPanel's own `onNowPlayingDockToggled` call site — fired both when the hotspot/close
     /// button is tapped and when the tray collapses with the dock left open
-    /// (NotchView's own `.onChange(of: uiState.isExpanded)`). NowPlayingController's own doc
-    /// comment on why it only ever runs while the dock is actually open.
+    /// (NotchView's own `.onChange(of: uiState.isExpanded)`). Tracked here (not read back off
+    /// `NotchUIState`, which this class doesn't own) purely so `updateNowPlayingControllerLifecycle()`
+    /// can combine it with `headphoneState.isMediaPlaying`.
+    private var isNowPlayingDockOpen = false
+
     private func setNowPlayingDockOpen(_ isOpen: Bool) {
-        if isOpen {
+        isNowPlayingDockOpen = isOpen
+        updateNowPlayingControllerLifecycle()
+    }
+
+    /// Owner spec, 2026-11-07: the notch bar's own left wing shows the real now-playing artwork,
+    /// circular-cropped, whenever media is playing (NotchExtensionBar's own doc comment) — not just
+    /// while the tray's dock happens to be open. That means NowPlayingController can no longer be
+    /// gated purely by `isNowPlayingDockOpen`; it needs to run whenever *either* is true, so closing
+    /// the dock mid-playback doesn't kill the notch bar's own artwork, and media stopping while the
+    /// dock happens to be open doesn't leave it running for no reason. A deliberate widening of the
+    /// private-API surface — confirmed explicitly with the owner first (this always-visible notch
+    /// bar now shares the same fragility risk the dock already had, not just an optional feature
+    /// anymore), not something this method decided on its own.
+    private func updateNowPlayingControllerLifecycle() {
+        if isNowPlayingDockOpen || headphoneState.isMediaPlaying {
             nowPlayingController.start()
         } else {
             nowPlayingController.stop()
             // Clears whatever was last shown so a stale track/art from the previous session
-            // doesn't flash before the lazily-restarted controller delivers a fresh update the
-            // next time the dock opens.
+            // doesn't flash before the lazily-restarted controller delivers a fresh update next time.
             headphoneState.nowPlayingTitle = nil
             headphoneState.nowPlayingArtist = nil
             headphoneState.nowPlayingArtwork = nil

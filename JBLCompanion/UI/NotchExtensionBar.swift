@@ -26,9 +26,31 @@ struct NotchExtensionBar: View {
     /// to be orange. and when disconnected, white." Tints the left-wing logo only — the
     /// noise-mode/media side on the right is unaffected.
     let isConnected: Bool
+    /// Owner spec, 2026-11-07: "when media is playing... pass the media image... in a circular
+    /// vibe fitting into the notch" — swaps the left-wing logo mark for the real now-playing
+    /// artwork while media is playing, same way `noiseModeIcon` already swaps the right wing for
+    /// the waveform. `nil` (nothing playing, or the adapter hasn't delivered artwork yet) falls
+    /// back to the ordinary mark — AppDelegate's own doc comment on why this means
+    /// NowPlayingController now runs for the lifetime of `isMediaPlaying`, not just while the
+    /// tray's own dock is open.
+    let nowPlayingArtwork: NSImage?
     let height: CGFloat
     @State private var isHovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    @ViewBuilder
+    private var leftWingIcon: some View {
+        if isMediaPlaying, let nowPlayingArtwork {
+            Image(nsImage: nowPlayingArtwork)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: height * 0.5, height: height * 0.5)
+                .clipShape(Circle())
+                .frame(width: height, height: height)
+        } else {
+            icon("HushMarkWhite", tint: isConnected ? Theme.Brand.orange : .white)
+        }
+    }
 
     @ViewBuilder
     private var noiseModeIcon: some View {
@@ -77,7 +99,7 @@ struct NotchExtensionBar: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            icon("HushMarkWhite", tint: isConnected ? Theme.Brand.orange : .white)
+            leftWingIcon
             Spacer(minLength: 0)
             noiseModeIcon
         }
@@ -124,15 +146,25 @@ struct NotchExtensionBar: View {
 }
 
 #Preview("Notch extension bar") {
-    NotchExtensionBar(noiseMode: .anc, isMediaPlaying: false, isConnected: true, height: 33)
+    NotchExtensionBar(noiseMode: .anc, isMediaPlaying: false, isConnected: true, nowPlayingArtwork: nil, height: 33)
         .frame(width: 33 + 64, height: 33)
         .padding(40)
         .background(Color.gray)
 }
 
-#Preview("Notch extension bar — media playing") {
-    NotchExtensionBar(noiseMode: .anc, isMediaPlaying: true, isConnected: true, height: 33)
+#Preview("Notch extension bar — media playing, no artwork yet") {
+    NotchExtensionBar(noiseMode: .anc, isMediaPlaying: true, isConnected: true, nowPlayingArtwork: nil, height: 33)
         .frame(width: 33 + 64, height: 33)
         .padding(40)
         .background(Color.gray)
+}
+
+#Preview("Notch extension bar — media playing, with artwork") {
+    NotchExtensionBar(
+        noiseMode: .anc, isMediaPlaying: true, isConnected: true,
+        nowPlayingArtwork: NSImage(systemSymbolName: "music.note", accessibilityDescription: nil), height: 33
+    )
+    .frame(width: 33 + 64, height: 33)
+    .padding(40)
+    .background(Color.gray)
 }

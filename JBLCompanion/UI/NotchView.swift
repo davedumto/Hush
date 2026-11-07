@@ -332,7 +332,8 @@ struct NotchView: View {
             // a fused two-wing bar instead of CollapsedPill's plain floating circle.
             NotchExtensionBar(
                 noiseMode: state.noiseMode, isMediaPlaying: state.isMediaPlaying,
-                isConnected: state.connection == .connected, height: size.height
+                isConnected: state.connection == .connected, nowPlayingArtwork: state.nowPlayingArtwork,
+                height: size.height
             )
                 .frame(width: size.width, height: size.height)
         } else {
