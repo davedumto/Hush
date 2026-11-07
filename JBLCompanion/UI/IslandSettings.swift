@@ -15,6 +15,16 @@ enum IslandSettings {
         /// `autoExpandOnConnect` above. `AppDelegate.syncFocusFilterWatcherWithSettings()` is the
         /// only thing that reads this outside the settings UI itself.
         static let focusFilterANCOnDND = "islandFocusFilterANCOnDND"
+        /// Owner spec, 2026-11-07, feature brainstorm #3: "scheduled noise mode — 'quiet hours'
+        /// that switch to ANC/Off at set times, independent of Focus." Off by default, same
+        /// opt-in reasoning as `focusFilterANCOnDND` above. Start/end are stored as minutes since
+        /// midnight (0...1439), not `Date`s — a fixed daily clock time has no real calendar date
+        /// of its own, and minutes-since-midnight avoids any timezone/DST storage ambiguity a
+        /// stored `Date` would carry.
+        static let scheduledQuietHoursEnabled = "islandScheduledQuietHoursEnabled"
+        static let scheduledQuietHoursStartMinutes = "islandScheduledQuietHoursStartMinutes"
+        static let scheduledQuietHoursEndMinutes = "islandScheduledQuietHoursEndMinutes"
+        static let scheduledQuietHoursMode = "islandScheduledQuietHoursMode"
         /// One key per edge (not per display, unlike dockEdge/dockOffset below) — a "how far from
         /// the top" preference is about the edge itself, not which physical display it's on.
         static func edgeMargin(for edge: DockEdge) -> String { "islandEdgeMargin.\(edge.rawValue)" }
@@ -100,6 +110,40 @@ enum IslandSettings {
     static var focusFilterANCOnDND: Bool {
         get { UserDefaults.standard.bool(forKey: Key.focusFilterANCOnDND) }
         set { UserDefaults.standard.set(newValue, forKey: Key.focusFilterANCOnDND) }
+    }
+
+    /// Off by default — see `Key.scheduledQuietHoursEnabled`'s own doc comment.
+    static var scheduledQuietHoursEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: Key.scheduledQuietHoursEnabled) }
+        set { UserDefaults.standard.set(newValue, forKey: Key.scheduledQuietHoursEnabled) }
+    }
+
+    /// 22:00 (10pm) when nothing's been saved yet — a reasonable default "quiet hours" start.
+    static var scheduledQuietHoursStartMinutes: Int {
+        get {
+            guard UserDefaults.standard.object(forKey: Key.scheduledQuietHoursStartMinutes) != nil else { return 22 * 60 }
+            return UserDefaults.standard.integer(forKey: Key.scheduledQuietHoursStartMinutes)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: Key.scheduledQuietHoursStartMinutes) }
+    }
+
+    /// 07:00 (7am) when nothing's been saved yet — paired with the 22:00 default start above.
+    static var scheduledQuietHoursEndMinutes: Int {
+        get {
+            guard UserDefaults.standard.object(forKey: Key.scheduledQuietHoursEndMinutes) != nil else { return 7 * 60 }
+            return UserDefaults.standard.integer(forKey: Key.scheduledQuietHoursEndMinutes)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: Key.scheduledQuietHoursEndMinutes) }
+    }
+
+    /// `.anc` when nothing's been saved yet, matching the feature's own "ANC/Off" framing in the
+    /// owner's original brainstorm (ANC picked as the more likely-wanted default of the two).
+    static var scheduledQuietHoursMode: CommandableNoiseMode {
+        get {
+            guard let raw = UserDefaults.standard.string(forKey: Key.scheduledQuietHoursMode) else { return .anc }
+            return CommandableNoiseMode(rawValue: raw) ?? .anc
+        }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: Key.scheduledQuietHoursMode) }
     }
 
     /// `.top` (the only edge reachable before this task) when nothing has been saved yet for this

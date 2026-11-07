@@ -32,7 +32,7 @@ enum NoiseMode {
 /// a settable target. Off has no verified (or even captured) command frame at all, so it stays in
 /// this set purely so its segment can still be shown, disabled, rather than disappearing — see
 /// Tune770NCProfile.isModeVerified and NoiseControlCommander.commandFrame.
-enum CommandableNoiseMode: CaseIterable, Hashable {
+enum CommandableNoiseMode: String, CaseIterable, Hashable {
     case off
     case anc
     case talkThru

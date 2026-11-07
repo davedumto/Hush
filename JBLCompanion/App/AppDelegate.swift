@@ -74,6 +74,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let focusModeWatcher = FocusModeWatcher()
     private let nowPlayingController = NowPlayingController()
     private let lowBatteryAlertCoordinator = LowBatteryAlertCoordinator()
+    private let scheduledQuietHoursCoordinator = ScheduledQuietHoursCoordinator()
+    private let scheduledQuietHoursWatcher = ScheduledQuietHoursWatcher()
 
     /// Island Settings/FeedbackView are real restorable `Window` scenes (JBLCompanionApp.swift),
     /// so macOS's own window-state restoration reopens whichever one was left open the moment the
@@ -135,6 +137,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.showFocusFilterPermissionPromptIfNeeded()
         }
         syncFocusFilterWatcherWithSettings()
+
+        scheduledQuietHoursWatcher.onCheck = { [weak self] nowMinutes in
+            self?.applyScheduledQuietHours(nowMinutes: nowMinutes)
+        }
+        syncScheduledQuietHoursWatcherWithSettings()
 
         // Owner spec, 2026-11-07: a media dock in the expanded card's hero area with play/pause/
         // next/previous for whatever's playing system-wide, plus (added same day) real artwork in
@@ -205,6 +212,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         globalHotKeyMonitor.stop()
         focusModeWatcher.stop()
         nowPlayingController.stop()
+        scheduledQuietHoursWatcher.stop()
     }
 
     /// RequiredFonts.postScriptNames (design/DESIGN_GUIDE.md §2) should already be registered via
@@ -396,6 +404,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.panel?.settingsDidChange()
             self?.syncFocusFilterWatcherWithSettings()
+            self?.syncScheduledQuietHoursWatcherWithSettings()
         }
     }
 
@@ -412,6 +421,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             focusModeWatcher.stop()
         }
+    }
+
+    /// `syncFocusFilterWatcherWithSettings()`'s own counterpart for `IslandSettings.scheduledQuietHoursEnabled`,
+    /// same call sites (launch, every settings change), same start/stop-to-match-the-toggle shape.
+    private func syncScheduledQuietHoursWatcherWithSettings() {
+        if IslandSettings.scheduledQuietHoursEnabled {
+            scheduledQuietHoursWatcher.start()
+        } else {
+            scheduledQuietHoursWatcher.stop()
+        }
+    }
+
+    /// `ScheduledQuietHoursWatcher.onCheck`'s own call site — same threading pattern as
+    /// `applyFocusFilterANC(active:)`: ask the pure coordinator what to do, then route through the
+    /// same `requestNoiseMode` every other mode-change path already uses.
+    private func applyScheduledQuietHours(nowMinutes: Int) {
+        guard let mode = scheduledQuietHoursCoordinator.modeToRequest(
+            nowMinutes: nowMinutes,
+            startMinutes: IslandSettings.scheduledQuietHoursStartMinutes,
+            endMinutes: IslandSettings.scheduledQuietHoursEndMinutes,
+            quietHoursMode: IslandSettings.scheduledQuietHoursMode,
+            currentMode: currentCommandableNoiseMode
+        ) else { return }
+        requestNoiseMode(mode)
     }
 
     /// Whether `mode`'s command frame is independently verified — the segmented control and the

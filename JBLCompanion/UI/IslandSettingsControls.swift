@@ -24,6 +24,10 @@ struct IslandSettingsControls: View {
     @AppStorage(IslandSettings.Key.chosenDisplayUUID) private var chosenDisplayUUID: String = ""
     @AppStorage(IslandSettings.Key.autoExpandOnConnect) private var autoExpandOnConnect: Bool = false
     @AppStorage(IslandSettings.Key.focusFilterANCOnDND) private var focusFilterANCOnDND: Bool = false
+    @AppStorage(IslandSettings.Key.scheduledQuietHoursEnabled) private var scheduledQuietHoursEnabled: Bool = false
+    @AppStorage(IslandSettings.Key.scheduledQuietHoursStartMinutes) private var scheduledQuietHoursStartMinutes: Int = 22 * 60
+    @AppStorage(IslandSettings.Key.scheduledQuietHoursEndMinutes) private var scheduledQuietHoursEndMinutes: Int = 7 * 60
+    @AppStorage(IslandSettings.Key.scheduledQuietHoursMode) private var scheduledQuietHoursMode: CommandableNoiseMode = .anc
 
     /// Mirrors SMAppService.mainApp's own live registration status — not @AppStorage-backed: the
     /// real source of truth lives outside UserDefaults entirely here (in Login Items), so this is
@@ -52,6 +56,18 @@ struct IslandSettingsControls: View {
                 glassRow(corners: [.bottomLeft, .bottomRight], joined: true) { focusFilterANCOnDNDRow }
             }
 
+            sectionLabel("Quiet Hours")
+            VStack(spacing: 1) {
+                glassRow(
+                    corners: scheduledQuietHoursEnabled ? [.topLeft, .topRight] : .allCorners,
+                    joined: scheduledQuietHoursEnabled
+                ) { scheduledQuietHoursEnabledRow }
+                if scheduledQuietHoursEnabled {
+                    glassRow(corners: [], joined: true) { scheduledQuietHoursTimeRangeRow }
+                    glassRow(corners: [.bottomLeft, .bottomRight], joined: true) { scheduledQuietHoursModeRow }
+                }
+            }
+
             sectionLabel("Display")
             glassRow { displayRow }
         }
@@ -64,6 +80,10 @@ struct IslandSettingsControls: View {
         .onChange(of: pillDiameter) { _, _ in onSettingsChanged() }
         .onChange(of: chosenDisplayUUID) { _, _ in onSettingsChanged() }
         .onChange(of: focusFilterANCOnDND) { _, _ in onSettingsChanged() }
+        .onChange(of: scheduledQuietHoursEnabled) { _, _ in onSettingsChanged() }
+        .onChange(of: scheduledQuietHoursStartMinutes) { _, _ in onSettingsChanged() }
+        .onChange(of: scheduledQuietHoursEndMinutes) { _, _ in onSettingsChanged() }
+        .onChange(of: scheduledQuietHoursMode) { _, _ in onSettingsChanged() }
         .onChange(of: notchAttachmentMode) { _, newValue in
             guard let currentDisplayUUID else { return }
             IslandSettings.setNotchAttachmentMode(newValue, forDisplayUUID: currentDisplayUUID)
@@ -145,6 +165,76 @@ struct IslandSettingsControls: View {
             Spacer()
             OrangeToggle(isOn: $focusFilterANCOnDND)
         }
+    }
+
+    /// Owner spec, 2026-11-07, feature brainstorm #3: "scheduled noise mode — 'quiet hours' that
+    /// switch to ANC/Off at set times, independent of Focus." `AppDelegate.syncScheduledQuietHoursWatcherWithSettings()`
+    /// is what actually starts/stops `ScheduledQuietHoursWatcher`, triggered through the same
+    /// `onSettingsChanged` hook every other row here already uses.
+    private var scheduledQuietHoursEnabledRow: some View {
+        HStack {
+            Text("Scheduled Quiet Hours")
+                .font(Theme.Fonts.subText)
+                .foregroundStyle(Theme.Semantic.textPrimary)
+            Spacer()
+            OrangeToggle(isOn: $scheduledQuietHoursEnabled)
+        }
+    }
+
+    private var scheduledQuietHoursTimeRangeRow: some View {
+        HStack(spacing: 6) {
+            DatePicker("", selection: quietHoursStartDate, displayedComponents: .hourAndMinute)
+                .labelsHidden()
+            Text("to")
+                .font(Theme.Fonts.subText)
+                .foregroundStyle(Theme.Semantic.textSecondary)
+            DatePicker("", selection: quietHoursEndDate, displayedComponents: .hourAndMinute)
+                .labelsHidden()
+            Spacer()
+        }
+    }
+
+    private var scheduledQuietHoursModeRow: some View {
+        HStack {
+            Text("Mode")
+                .font(Theme.Fonts.subText)
+                .foregroundStyle(Theme.Semantic.textPrimary)
+            Spacer()
+            Picker("", selection: $scheduledQuietHoursMode) {
+                ForEach(CommandableNoiseMode.allCases, id: \.self) { mode in
+                    Text(mode.displayText).tag(mode)
+                }
+            }
+            .labelsHidden()
+            .tint(Theme.Semantic.textSecondary)
+        }
+    }
+
+    /// `IslandSettings.Key.scheduledQuietHoursStartMinutes`'s own doc comment on why the stored
+    /// value is plain minutes-since-midnight, not a `Date` — these two bindings are the one place
+    /// that boundary with `DatePicker` (which only speaks `Date`) has to be crossed, converting
+    /// against an arbitrary reference date since only the time-of-day component is ever read back.
+    private var quietHoursStartDate: Binding<Date> {
+        Binding(
+            get: { Self.date(fromMinutes: scheduledQuietHoursStartMinutes) },
+            set: { scheduledQuietHoursStartMinutes = Self.minutes(from: $0) }
+        )
+    }
+
+    private var quietHoursEndDate: Binding<Date> {
+        Binding(
+            get: { Self.date(fromMinutes: scheduledQuietHoursEndMinutes) },
+            set: { scheduledQuietHoursEndMinutes = Self.minutes(from: $0) }
+        )
+    }
+
+    private static func date(fromMinutes minutes: Int) -> Date {
+        Calendar.current.date(bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: Date()) ?? Date()
+    }
+
+    private static func minutes(from date: Date) -> Int {
+        let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+        return (components.hour ?? 0) * 60 + (components.minute ?? 0)
     }
 
     private var displayRow: some View {
