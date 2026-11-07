@@ -10,6 +10,14 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     from: 2.10.0
+  # Wraps the private MediaRemote.framework (NowPlayingController's own doc comment has the full
+  # story on why there's no public API for this, and why it's bridged through /usr/bin/perl). No
+  # tagged releases exist on this fork, so this is pinned to an exact commit rather than a branch —
+  # a moving branch could silently change this private-API-dependent code out from under a plain
+  # `xcodegen generate`/package resolution with no corresponding change in this repo.
+  MediaRemoteAdapter:
+    url: https://github.com/ejbills/mediaremote-adapter.git
+    revision: 7d5b6cc99b933ae2a2378d11ee9798acf6b69009
 targets:
   JBLCompanion:
     type: application
@@ -88,6 +96,7 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - package: Sparkle
+      - package: MediaRemoteAdapter
   JBLCompanionTests:
     type: bundle.unit-test
     platform: macOS

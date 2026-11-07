@@ -93,6 +93,13 @@ final class NotchUIState {
     /// Bumped by NotchPanel.requestOpenFeedback() — same pattern and same reason as
     /// islandSettingsRequestToken above.
     var feedbackRequestToken: Int = 0
+    /// Owner spec, 2026-11-07: tapping the hero's "+" hotspot slides the now-playing media dock in
+    /// over the headphone photo (ExpandedCard.heroSection's own doc comment) — transient
+    /// presentation state, same reasoning as `isExpanded`, not data (HeadphoneState's own
+    /// nowPlaying* fields hold the actual track data). NotchView resets this to false whenever the
+    /// card collapses, even if the dock was left open (its own `.onChange(of: isExpanded)`), so
+    /// NowPlayingController never keeps running invisibly after the tray itself closes.
+    var isNowPlayingDockOpen: Bool = false
 }
 
 /// Just the island's content — collapsed glyph+ring or the expanded card. The shape itself
@@ -172,6 +179,15 @@ struct NotchView: View {
     /// AppDelegate.notchSettingsDidChange() — same callback Island Settings already triggers on
     /// every change.
     let onIslandSettingsChanged: () -> Void
+    /// AppDelegate.toggleNowPlayingDock(_:) — starts/stops NowPlayingController
+    /// (NowPlayingController's own doc comment: lazy, only runs while the dock is actually open).
+    /// Called both from the hotspot's own tap (the closure built in `expandedContent` below) and
+    /// from this view's own `.onChange(of: uiState.isExpanded)`, so collapsing the tray without
+    /// first closing the dock still stops the adapter.
+    let onNowPlayingDockToggled: (Bool) -> Void
+    /// NowPlayingDockView's own play/pause/next/previous buttons — AppDelegate's
+    /// handleNowPlayingCommand(_:), same threading pattern as onSelectNoiseMode.
+    let onNowPlayingCommand: (NowPlayingCommand) -> Void
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -225,6 +241,32 @@ struct NotchView: View {
             guard newValue > 0 else { return }
             NSApplication.shared.activate(ignoringOtherApps: true)
             openWindow(id: FeedbackView.windowID)
+        }
+        // Owner spec, 2026-11-07: "when a media is playing, the tray should show the media player
+        // on default, but when no media, just show the headphones." Decided once, right when the
+        // tray opens — using `state.isMediaPlaying` (MediaPlaybackMonitor's own always-on CoreAudio
+        // signal, not NowPlayingController's own data) specifically because that signal is already
+        // live the instant the tray opens, with no cold-start lag (NowPlayingController itself only
+        // starts once this flips the dock open — NowPlayingController's own doc comment). Deliberately
+        // NOT a continuous live binding to `isMediaPlaying` for the rest of the session: once open,
+        // the hotspot/close button fully own it, so playback starting or stopping while the tray is
+        // already sitting open never yanks the view out from under whatever the user's doing.
+        //
+        // The same `.onChange` also covers NotchUIState.isNowPlayingDockOpen's own doc comment:
+        // collapsing the tray (tab tap, pill tap, clicking away) never routes through ExpandedCard's
+        // own dock-close button, so without the `else` branch below, leaving the dock open and just
+        // collapsing the tray would strand NowPlayingController running in the background forever.
+        .onChange(of: uiState.isExpanded) { _, isExpanded in
+            if isExpanded {
+                let shouldOpenDock = state.isMediaPlaying
+                guard shouldOpenDock != uiState.isNowPlayingDockOpen else { return }
+                uiState.isNowPlayingDockOpen = shouldOpenDock
+                onNowPlayingDockToggled(shouldOpenDock)
+            } else {
+                guard uiState.isNowPlayingDockOpen else { return }
+                uiState.isNowPlayingDockOpen = false
+                onNowPlayingDockToggled(false)
+            }
         }
     }
 
@@ -360,7 +402,13 @@ struct NotchView: View {
             canUseMaxVolumeLimiter: canUseMaxVolumeLimiter(), onSetMaxVolumeLimiter: onSetMaxVolumeLimiter,
             canUseVoicePrompt: canUseVoicePrompt(), onSetVoicePrompt: onSetVoicePrompt,
             todayListeningSeconds: todayListeningSeconds(),
-            openIslandSettingsRequestToken: uiState.islandSettingsRequestToken
+            openIslandSettingsRequestToken: uiState.islandSettingsRequestToken,
+            isNowPlayingDockOpen: uiState.isNowPlayingDockOpen,
+            onToggleNowPlayingDock: {
+                uiState.isNowPlayingDockOpen.toggle()
+                onNowPlayingDockToggled(uiState.isNowPlayingDockOpen)
+            },
+            onNowPlayingCommand: onNowPlayingCommand
         )
     }
 

@@ -72,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// separate implementation attempts).
     private let focusFilterNoiseModeCoordinator = FocusFilterNoiseModeCoordinator()
     private let focusModeWatcher = FocusModeWatcher()
+    private let nowPlayingController = NowPlayingController()
 
     /// Island Settings/FeedbackView are real restorable `Window` scenes (JBLCompanionApp.swift),
     /// so macOS's own window-state restoration reopens whichever one was left open the moment the
@@ -135,6 +136,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         syncFocusFilterWatcherWithSettings()
 
+        // Owner spec, 2026-11-07: a media dock in the expanded card's hero area with play/pause/
+        // next/previous for whatever's playing system-wide — NowPlayingController's own doc
+        // comment for the full story (and why this never starts here at launch the way
+        // focusModeWatcher/MediaPlaybackMonitor do; it's started/stopped per-dock-open instead,
+        // from NotchPanel's own onNowPlayingDockToggled below).
+        nowPlayingController.onNowPlayingChanged = { [weak self] info in
+            guard let self else { return }
+            self.headphoneState.nowPlayingTitle = info?.title
+            self.headphoneState.nowPlayingArtist = info?.artist
+            self.headphoneState.nowPlayingArtwork = info?.artwork
+            self.headphoneState.nowPlayingIsPlaying = info?.isPlaying ?? false
+            self.headphoneState.nowPlayingDurationSeconds = info?.durationSeconds
+            self.headphoneState.nowPlayingElapsedSeconds = info?.elapsedSeconds
+            self.headphoneState.nowPlayingElapsedSnapshotDate = info == nil ? nil : Date()
+        }
+        nowPlayingController.onSourceIconResolved = { [weak self] icon in
+            self?.headphoneState.nowPlayingSourceAppIcon = icon
+        }
+
         classicMonitor.delegate = self
 
         let panel = NotchPanel(
@@ -155,7 +175,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             canUseVoicePrompt: { [weak self] in self?.canUseVoicePrompt ?? false },
             onSetVoicePrompt: { [weak self] on in self?.requestSetVoicePrompt(on) },
             todayListeningSeconds: { [weak self] in self?.listeningTimeTracker.currentTotalSeconds() ?? 0 },
-            onIslandSettingsChanged: { [weak self] in self?.notchSettingsDidChange() }
+            onIslandSettingsChanged: { [weak self] in self?.notchSettingsDidChange() },
+            onNowPlayingDockToggled: { [weak self] isOpen in self?.setNowPlayingDockOpen(isOpen) },
+            onNowPlayingCommand: { [weak self] command in self?.handleNowPlayingCommand(command) }
         )
         self.panel = panel
         let showCircle = UserDefaults.standard.object(forKey: "showNotchCircle") as? Bool ?? true
@@ -178,6 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         globalHotKeyMonitor.stop()
         focusModeWatcher.stop()
+        nowPlayingController.stop()
     }
 
     /// RequiredFonts.postScriptNames (design/DESIGN_GUIDE.md §2) should already be registered via
@@ -414,6 +437,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applyFocusFilterANC(active: Bool) {
         guard let mode = focusFilterNoiseModeCoordinator.modeToRequest(whenFocusActive: active, currentMode: currentCommandableNoiseMode) else { return }
         requestNoiseMode(mode)
+    }
+
+    /// NotchPanel's own `onNowPlayingDockToggled` call site — fired both when the hotspot/close
+    /// button is tapped and when the tray collapses with the dock left open
+    /// (NotchView's own `.onChange(of: uiState.isExpanded)`). NowPlayingController's own doc
+    /// comment on why it only ever runs while the dock is actually open.
+    private func setNowPlayingDockOpen(_ isOpen: Bool) {
+        if isOpen {
+            nowPlayingController.start()
+        } else {
+            nowPlayingController.stop()
+            // Clears whatever was last shown so a stale track/art from the previous session
+            // doesn't flash before the lazily-restarted controller delivers a fresh update the
+            // next time the dock opens.
+            headphoneState.nowPlayingTitle = nil
+            headphoneState.nowPlayingArtist = nil
+            headphoneState.nowPlayingArtwork = nil
+            headphoneState.nowPlayingSourceAppIcon = nil
+            headphoneState.nowPlayingIsPlaying = false
+            headphoneState.nowPlayingDurationSeconds = nil
+            headphoneState.nowPlayingElapsedSeconds = nil
+            headphoneState.nowPlayingElapsedSnapshotDate = nil
+        }
+    }
+
+    /// NotchPanel's own `onNowPlayingCommand` call site — MediaDockControls' own buttons, same
+    /// threading pattern as requestNoiseMode above.
+    private func handleNowPlayingCommand(_ command: NowPlayingCommand) {
+        switch command {
+        case .togglePlayPause: nowPlayingController.togglePlayPause()
+        case .next: nowPlayingController.nextTrack()
+        case .previous: nowPlayingController.previousTrack()
+        }
     }
 
     /// `FocusModeWatcher.onPermissionDenied`'s own call site. There is no programmatic Full Disk

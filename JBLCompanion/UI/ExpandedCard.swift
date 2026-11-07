@@ -89,6 +89,19 @@ struct ExpandedCard: View {
     /// jumps straight to the in-tray Island Settings sheet, skipping the picker, since that's the
     /// one sheet the menu item is asking for specifically.
     var openIslandSettingsRequestToken: Int = 0
+    /// Whether the now-playing media dock is swapped in over the headphone photo in `heroSection` —
+    /// NotchUIState.isNowPlayingDockOpen's own doc comment. A plain value (not the whole uiState
+    /// object), matching every other piece of NotchPanel-owned UI state this view already reads
+    /// (openIslandSettingsRequestToken above).
+    var isNowPlayingDockOpen: Bool = false
+    /// Tapping `hotspot` or `dockCloseButton` calls this — NotchView's own closure both flips
+    /// `uiState.isNowPlayingDockOpen` (driving this view's own transition) and forwards the new
+    /// value up to AppDelegate, which starts/stops NowPlayingController accordingly
+    /// (NowPlayingController's own doc comment: lazy, only runs while the dock is actually open).
+    var onToggleNowPlayingDock: () -> Void = {}
+    /// NowPlayingDockView's own play/pause/next/previous buttons — AppDelegate's
+    /// handleNowPlayingCommand(_:), same threading pattern as onSelectNoiseMode.
+    var onNowPlayingCommand: (NowPlayingCommand) -> Void = { _ in }
 
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -100,6 +113,11 @@ struct ExpandedCard: View {
     /// those windows" — both used to be separate Windows). Mirrors `showingPowerOffConfirm`'s own
     /// slide-up-sheet pattern, just with one more level: picker -> destination.
     @State private var activeTraySheet: TraySheet? = nil
+    /// `hotspot`/`dockCloseButton`'s own matchedGeometryEffect pair — local to this card (unlike
+    /// `photoNamespace`, shared with CollapsedPill by NotchView), since nothing outside this view
+    /// ever needs to morph into/out of this one circle.
+    @Namespace private var nowPlayingHotspotNamespace
+    private static let nowPlayingHotspotID = "nowPlayingHotspot"
 
     private enum TraySheet: Hashable {
         case settingsPicker
@@ -798,21 +816,77 @@ struct ExpandedCard: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .offset(y: isVertical ? -25 : -40)
 
-                // §4: "Centred, bottom aligned" — not leading-aligned.
-                photoView
+                // Owner spec, 2026-11-07: tapping the hotspot slides the headphone photo out and
+                // the now-playing dock in, in the same spot — not a new row (cardSize's own doc
+                // comment above: the card's 500pt height has no slack left to grow for one). Both
+                // branches use the same `.move(edge: .leading)` transition, so it reads as one view
+                // pushing the other out rather than two independent crossfades.
+                if isNowPlayingDockOpen {
+                    NowPlayingDockView(
+                        title: state.nowPlayingTitle, artist: state.nowPlayingArtist,
+                        artwork: state.nowPlayingArtwork, sourceAppIcon: state.nowPlayingSourceAppIcon,
+                        isPlaying: state.nowPlayingIsPlaying,
+                        durationSeconds: state.nowPlayingDurationSeconds, elapsedSeconds: state.nowPlayingElapsedSeconds,
+                        elapsedSnapshotDate: state.nowPlayingElapsedSnapshotDate, isVertical: isVertical,
+                        onCommand: onNowPlayingCommand
+                    )
+                    // Owner spec, 2026-11-07, final pass: "move the x to be into the media player on
+                    // the top right instead, for all the islands positioning" — inset *inside* the
+                    // card's own padding (like traySheetHeader's own dismiss button sits inside its
+                    // sheet), not overhanging outside the card's edge. Every earlier attempt
+                    // (hero-relative coordinate, then an outward-offset overlay) fought the same
+                    // underlying uncertainty — the real Liquid Glass material (`glassEffect`, macOS
+                    // 26 — NowPlayingGlassBackground's own doc comment) renders at its own actual
+                    // size, undocumented and not fully predictable from this view's own padding —
+                    // which only ever mattered because the button lived *outside* the card's bounds.
+                    // Inset, it's just an ordinary child positioned relative to the card's own real
+                    // frame via `.overlay`, with nothing to clip or collide with regardless of dock
+                    // edge/corner. `hotspot`/`dockCloseButton` still share one matchedGeometryEffect
+                    // id (`nowPlayingHotspotNamespace` below), so SwiftUI still morphs the circle
+                    // from the hero's middle-left (hotspot) into this new inset top-right spot.
+                    .overlay(alignment: .topTrailing) {
+                        dockCloseButton
+                            .matchedGeometryEffect(id: Self.nowPlayingHotspotID, in: nowPlayingHotspotNamespace)
+                            .padding(10)
+                    }
+                    // Owner-reported: the close button's own overhang (offset above the card's top
+                    // edge, in the `.overlay` above) was getting clipped by the `.clipped()` below —
+                    // the composite (card + overhang) is bottom-aligned within the hero, so its own
+                    // total height (including the overhang) was tall enough to push its top past the
+                    // hero's own boundary. There was real unused slack below the card (the gap before
+                    // nameBlock, visible in the screenshot that reported this) — no bottom padding at
+                    // all (down from an earlier isVertical ? 6 : 10) shifts the whole composite down
+                    // into that slack, freeing the same amount of room back at the top for the
+                    // overhang instead.
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    // Owner-reported: the dock's own ideal height can exceed heroHeight (same real-
+                    // size-vs-padding gap as the overlay comment above), and an un-clipped
+                    // `GeometryReader`/`ZStack` doesn't cap a child to the space it was given — the
+                    // overflow rendered straight through into nameBlock below instead of stopping at
+                    // the hero's own boundary. `photoView`'s own branch stays unclipped (its ambient
+                    // glow is deliberately allowed to bleed slightly, same reasoning as this card's
+                    // own shadows elsewhere), but the dock branch has no equivalent reason to risk it.
+                    .clipped()
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+                } else {
+                    // §4: "Centred, bottom aligned" — not leading-aligned.
+                    photoView
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
 
-                // §5 "No headphones": no hotspot (nothing to tag on a mark with no real photo).
-                if !isNoDevice {
-                    hotspot
-                        .position(x: geo.size.width * (isVertical ? 0.14 : 0.22), y: heroHeight * 0.62)
-                }
+                    // §5 "No headphones": no hotspot (nothing to tag on a mark with no real photo).
+                    if !isNoDevice {
+                        hotspot
+                            .matchedGeometryEffect(id: Self.nowPlayingHotspotID, in: nowPlayingHotspotNamespace)
+                            .position(x: geo.size.width * (isVertical ? 0.14 : 0.22), y: heroHeight * 0.62)
+                    }
 
-                // §5: "no battery chip" while connecting or with no device, even if a BLE reading
-                // happens to already be cached from a previous connection.
-                if !isNoDevice && !isConnecting {
-                    batteryChip
-                        .padding(.bottom, isVertical ? 6 : 18)
+                    // §5: "no battery chip" while connecting or with no device, even if a BLE reading
+                    // happens to already be cached from a previous connection.
+                    if !isNoDevice && !isConnecting {
+                        batteryChip
+                            .padding(.bottom, isVertical ? 6 : 18)
+                    }
                 }
             }
         }
@@ -923,6 +997,26 @@ struct ExpandedCard: View {
                     .frame(width: 11, height: 11)
                     .foregroundStyle(.white)
             )
+            .contentShape(Circle())
+            .onTapGesture { withAnimation(powerOffSheetAnimation) { onToggleNowPlayingDock() } }
+    }
+
+    /// `hotspot`'s own counterpart while the now-playing dock is open — same glass-circle chrome,
+    /// an "x" instead of a "+", same position, same tap target: the hotspot itself is swapped out
+    /// along with the photo (heroSection's own `if isNowPlayingDockOpen` branch), so this is what
+    /// closes the dock back to the photo.
+    private var dockCloseButton: some View {
+        Circle()
+            .fill(Theme.Semantic.glassFill)
+            .overlay(Circle().strokeBorder(Theme.Semantic.glassStroke, lineWidth: 1))
+            .frame(width: 22, height: 22)
+            .overlay(
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white)
+            )
+            .contentShape(Circle())
+            .onTapGesture { withAnimation(powerOffSheetAnimation) { onToggleNowPlayingDock() } }
     }
 
     private var batteryChip: some View {

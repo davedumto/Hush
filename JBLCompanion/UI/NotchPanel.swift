@@ -70,6 +70,8 @@ final class NotchPanel: NSPanel {
     private let onSetVoicePrompt: (Bool) -> Void
     private let todayListeningSeconds: () -> TimeInterval
     private let onIslandSettingsChanged: () -> Void
+    private let onNowPlayingDockToggled: (Bool) -> Void
+    private let onNowPlayingCommand: (NowPlayingCommand) -> Void
 
     private let silhouette = NotchSilhouetteView(frame: .zero)
     private var hosting: NSHostingView<NotchView>!
@@ -246,7 +248,9 @@ final class NotchPanel: NSPanel {
         canUseVoicePrompt: @escaping () -> Bool = { false },
         onSetVoicePrompt: @escaping (Bool) -> Void = { _ in },
         todayListeningSeconds: @escaping () -> TimeInterval = { 0 },
-        onIslandSettingsChanged: @escaping () -> Void = {}
+        onIslandSettingsChanged: @escaping () -> Void = {},
+        onNowPlayingDockToggled: @escaping (Bool) -> Void = { _ in },
+        onNowPlayingCommand: @escaping (NowPlayingCommand) -> Void = { _ in }
     ) {
         self.headphoneState = headphoneState
         self.onSelectNoiseMode = onSelectNoiseMode
@@ -266,6 +270,8 @@ final class NotchPanel: NSPanel {
         self.onSetVoicePrompt = onSetVoicePrompt
         self.todayListeningSeconds = todayListeningSeconds
         self.onIslandSettingsChanged = onIslandSettingsChanged
+        self.onNowPlayingDockToggled = onNowPlayingDockToggled
+        self.onNowPlayingCommand = onNowPlayingCommand
 
         let resolution = Self.resolveScreen()
         let screen = resolution.screen
@@ -366,7 +372,9 @@ final class NotchPanel: NSPanel {
                 canUseMaxVolumeLimiter: canUseMaxVolumeLimiter, onSetMaxVolumeLimiter: onSetMaxVolumeLimiter,
                 canUseVoicePrompt: canUseVoicePrompt, onSetVoicePrompt: onSetVoicePrompt,
                 todayListeningSeconds: todayListeningSeconds,
-                onIslandSettingsChanged: onIslandSettingsChanged
+                onIslandSettingsChanged: onIslandSettingsChanged,
+                onNowPlayingDockToggled: onNowPlayingDockToggled,
+                onNowPlayingCommand: onNowPlayingCommand
             )
         )
         // NSHostingView does not clip its own content to its frame by default. `hosting` itself

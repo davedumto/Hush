@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -97,6 +98,30 @@ final class HeadphoneState {
     /// indicator (owner spec, 2026-10-25).
     var isMediaPlaying: Bool = false
     var lastUpdated: Date?
+
+    /// Populated only while the now-playing media dock is open (NotchUIState.isNowPlayingDockOpen's
+    /// own doc comment) — NowPlayingController is started lazily on open and stopped on close, so
+    /// these stay at their defaults the rest of the time rather than tracking anything continuously
+    /// in the background. Deliberately separate from `isMediaPlaying` above: that one is
+    /// CoreAudio-backed (MediaPlaybackMonitor), always running, drives the always-visible pill
+    /// waveform, and answers only "is anything making sound" — these come from the private
+    /// MediaRemote-adapter bridge instead, the only way to get actual track data/control, and are
+    /// local to the dock's own UI. Uniting the two into one signal was considered and rejected: the
+    /// always-on pill indicator would then depend on the same fragile private-API mechanism the
+    /// dock does, instead of the public CoreAudio API it's used reliably since before this feature
+    /// existed — see NowPlayingController's own doc comment for the full reasoning.
+    var nowPlayingTitle: String?
+    var nowPlayingArtist: String?
+    var nowPlayingArtwork: NSImage?
+    var nowPlayingSourceAppIcon: NSImage?
+    var nowPlayingIsPlaying: Bool = false
+    /// NowPlayingProgressBar's own doc comment — `nowPlayingElapsedSnapshotDate` is when this
+    /// `nowPlayingElapsedSeconds` reading was taken (AppDelegate sets it to `Date()` on every
+    /// update), so the progress bar can extrapolate forward by wall-clock time between updates
+    /// instead of only moving every time a fresh value happens to arrive.
+    var nowPlayingDurationSeconds: TimeInterval?
+    var nowPlayingElapsedSeconds: TimeInterval?
+    var nowPlayingElapsedSnapshotDate: Date?
 
     /// Non-nil while a noise-mode command has been sent but not yet confirmed by the headphones.
     /// Deliberately separate from `noiseMode` — the UI must never flip `noiseMode` optimistically.
